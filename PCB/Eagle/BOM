@@ -1,0 +1,19 @@
+Partlist
+
+Exported from xl4432.brd at 28/08/2023 22:12
+
+EAGLE Version 9.6.2 Copyright (c) 1988-2020 Autodesk, Inc.
+
+Assembly variant: 
+
+Part     Value           Package         Library         Position (mm)         Orientation
+
+4332-1   XM4432-SMT      XL4432-SMT      xl4432-smt      (20.32 77.47)         R180
+JP1                      1X03            adafruit        (26.67 67.31)         R0
+NODE1    NODEMCU_ESP8266 NODEMCU_ESP8266 nodemcu_esp8266 (16.51 30.48)         R180
+R1                       R2012           adafruit        (22.86 62.23)         R90
+R2                       R2012           adafruit        (26.67 62.23)         R90
+R3                       R2012           adafruit        (30.48 62.23)         R90
+U$1      PINHD-1X10      1X10-BIG        adafruit        (11.43 31.75)         R90
+U$2      PINHD-1X10      1X10-BIG        adafruit        (21.59 31.75)         R270
+X1                       SMA90_DIP       adafruit        (26.67 74.93)         R0
