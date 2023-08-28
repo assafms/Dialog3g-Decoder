@@ -10,17 +10,29 @@ copy the directory to the custom_components directory under ESPHOME (or create i
 Final directory structure in Home assistant 
 
 config
+
 	esphome
+ 
 		watermeter.yaml
+  
 		secrets.yaml
+  
 		custom_components
+  
 			xl4432_spi_sensor
+   
 				__init__.py
+    
 				sensor.py
+    
 				xl4432.cpp
+    
 				xl4432.h
+    
 				xl4432_spi_sensor.cpp
+    
 				xl4432_spi_sensor.h
+    
 
 
 Important !
