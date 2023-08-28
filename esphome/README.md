@@ -9,9 +9,9 @@ Installation
 copy the directory to the custom_components directory under ESPHOME (or create it)
 Final directory structure in Home assistant 
 
-config
-	esphome
-		watermeter.yaml
+config<br>
+	esphome<br>
+		watermeter.yaml<br>
 		secrets.yaml
 		custom_components
 			xl4432_spi_sensor
