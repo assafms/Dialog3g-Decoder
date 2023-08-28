@@ -9,18 +9,18 @@ Installation
 copy the directory to the custom_components directory under ESPHOME (or create it)
 Final directory structure in Home assistant 
 
-config<br>
-	esphome<br>
-		watermeter.yaml<br>
-		secrets.yaml
-		custom_components
-			xl4432_spi_sensor
-				__init__.py
-				sensor.py
-				xl4432.cpp
-				xl4432.h
-				xl4432_spi_sensor.cpp
-				xl4432_spi_sensor.h
+config  
+	esphome  
+		watermeter.yaml  
+		secrets.yaml  
+		custom_components  
+			xl4432_spi_sensor  
+				__init__.py  
+				sensor.py  
+				xl4432.cpp  
+				xl4432.h  
+				xl4432_spi_sensor.cpp  
+				xl4432_spi_sensor.h  
     
 
 
