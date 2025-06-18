@@ -13,6 +13,7 @@ class Xl4432 {
 	uint8_t packet[PACKET_SIZE];
 	char  output[(PACKET_SIZE * 2) + 1];
 	float meterMeasurment;
+	float lastMeterMeasurment;
 	bool  packetReady;
 	void  spiDisableReciver();
 	void  spiEnableReciver();

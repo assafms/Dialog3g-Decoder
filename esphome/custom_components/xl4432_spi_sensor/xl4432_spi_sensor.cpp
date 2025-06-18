@@ -13,6 +13,8 @@ static const char *TAG = "xl4432_spi_sensor.sensor";
 # change this to your METER_ID  , in most cases it is on the meter (decimal) or in the bill and needs to be converted 
 # Meter ID = 12345678  => 0xBC614E  => METER_ID[]= {0x4E,0x61,0xBC}
 char  METER_ID[]= {0x4E,0x61,0xBC};
+//char  METER_ID[]= {0x12,0x34,0x56};    //Use this if you want do debug any meter ID 
+
 Xl4432 xl4432(METER_ID);
 
 
@@ -31,6 +33,7 @@ void Xl4432SPISensor::setup() {
     pinMode(nIRQ_PIN, INPUT);
     attachInterrupt(nIRQ_PIN, nIRQ_ISR, FALLING);
     xl4432.initXl4432Registers();
+    xl4432.lastMeterMeasurment = 0 ;
 	
 }
 
@@ -43,9 +46,28 @@ void Xl4432SPISensor::loop() {
 if(xl4432.packetReady and xl4432.meterMeasurment>0)
     {
       xl4432.packetReady = 0;
-      publish_state(xl4432.meterMeasurment);
-	  ESP_LOGD("custom","Packet:%s",xl4432.output);
+      // We dont have any CRC so we wait for 2 measurments that are the same 
+      // before we send the information to HA 
+      if (xl4432.meterMeasurment == xl4432.lastMeterMeasurment){
+          publish_state(xl4432.meterMeasurment);
+          ESP_LOGD("custom","Raw Packet:%s",xl4432.output);
+      }
+      else{
+        xl4432.lastMeterMeasurment = xl4432.meterMeasurment;
+        ESP_LOGD("custom","Raw Packet:%s",xl4432.output);
+        ESP_LOGD("custom","Value has changed , waiting for another");
+           
+      }
+      
+	  
     }
+
+if(xl4432.packetReady and xl4432.meterMeasurment<0)
+    {
+      xl4432.packetReady = 0;
+	    ESP_LOGD("custom","Unknown Packet:%s",xl4432.output);
+    }
+
 
 }
 
