@@ -24,8 +24,8 @@ Final directory structure in Home assistant
 |---esphome  
 |-----watermeter.yaml  
 |-----secrets.yaml  
-|-----custom_components 
-|-------syslog
+|-----custom_components  
+|-------syslog  
 |---------__init__.py  
 |---------syslog_component.cpp  
 |---------syslog_component.h  
