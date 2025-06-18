@@ -7,6 +7,7 @@ Xl4432::Xl4432(char id[3])
 	nIRQState = 0;
 	meterMeasurment = -1;
 	packetReady=0;
+    lastMeterMeasurment = 0;
 	METER_ID[0]=id[0];
 	METER_ID[1]=id[1];
 	METER_ID[2]=id[2];
@@ -25,7 +26,7 @@ float Xl4432::extractMeterReading()
      }
   else
     return -1;
-     
+    
   
 }
 
@@ -144,11 +145,9 @@ void Xl4432::checkForNewPacket()
     {
         readPacketFromFifo();
         meterMeasurment = extractMeterReading();
-        if(meterMeasurment>0)
-        {
-          binToHexString();
-		  packetReady=1;
-        }
+        binToHexString();
+        packetReady=1;
+        
         
     }
 }
