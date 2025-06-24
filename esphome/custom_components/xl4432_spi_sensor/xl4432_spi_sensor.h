@@ -19,6 +19,7 @@ class Xl4432SPISensor : public sensor::Sensor,
   void update() override;
   void loop() override;
   void dump_config() override;
+  void set_meter_id(const std::string &meter_id);
 };
 
 }  // namespace xl4432_spi_sensor

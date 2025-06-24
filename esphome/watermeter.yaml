@@ -43,6 +43,9 @@ sensor:
   - platform: xl4432_spi_sensor
     name: xl4432
     cs_pin: GPIO15
+    # change this to your METER_ID  , in most cases it is on the meter (decimal) or in the bill and needs to be converted 
+    # Meter ID = 12345678  => 0xBC614E  => METER_ID[]= {0x4E,0x61,0xBC}
+    meter_id: "0x4E61BC"
 
 mqtt:
   broker: !secret Dialog3G_Decoder_BROKER
