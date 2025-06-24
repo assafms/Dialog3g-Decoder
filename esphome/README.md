@@ -42,7 +42,32 @@ Final directory structure in Home assistant
 
 
 
-Important !
-************************************************
-* Change the METER_ID in xl4432_spi_sensor.cpp *
-************************************************
+Configuration
+--------------
+The meter ID can now be configured in the YAML file instead of editing the C++ code.
+
+In your watermeter.yaml file, add the meter_id parameter to the xl4432_spi_sensor configuration:
+
+```yaml
+sensor:
+  - platform: xl4432_spi_sensor
+    name: xl4432
+    cs_pin: GPIO15
+    meter_id: "0x4E61BC"
+```
+
+The meter_id format is a single hex string:
+- "0x4E61BC" (with 0x prefix)
+- "4E61BC" (without 0x prefix)
+
+To find your meter ID:
+1. Look for the meter ID on your water meter (usually in decimal format)
+2. Convert it to hexadecimal (e.g., 12345678 → 0xBC614E)
+3. Reverse the byte order: 0xBC614E → 0x4E61BC
+4. Use the reversed hex value in the YAML
+
+Example conversion:
+- Meter ID = 12345678 (decimal)
+- Convert to hex: 0xBC614E
+- Reverse byte order: 0x4E61BC
+- Use in YAML: meter_id: "0x4E61BC"
