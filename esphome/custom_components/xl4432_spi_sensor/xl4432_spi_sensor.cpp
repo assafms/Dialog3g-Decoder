@@ -58,7 +58,7 @@ void Xl4432SPISensor::set_meter_id(const std::string &meter_id) {
   }
 }
 
-ICACHE_RAM_ATTR void nIRQ_ISR(){
+IRAM_ATTR void nIRQ_ISR(){
   xl4432.spiDisableReciver();
   xl4432.checkForNewPacket();
   xl4432.spiEnableReciver();

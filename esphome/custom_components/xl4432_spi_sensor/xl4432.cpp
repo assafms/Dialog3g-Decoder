@@ -35,6 +35,7 @@ float Xl4432::extractMeterReading()
     else
       return -1;
   }
+  return -1;
 }
 
 void Xl4432::readPacketFromFifo()

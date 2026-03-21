@@ -15,11 +15,12 @@ class Xl4432 {
 	float meterMeasurment;
 	float lastMeterMeasurment;
 	bool  packetReady;
+	bool  useIdAsSync;
 	void  spiDisableReciver();
 	void  spiEnableReciver();
 	void  checkForNewPacket();
 	void  initXl4432Registers();
-	Xl4432(char id[3]);
+	Xl4432(char id[3], bool use_id_as_sync = false);
 
   private:
 	float extractMeterReading();
