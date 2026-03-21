@@ -2,7 +2,7 @@
 #include "xl4432_spi_sensor.h"
 #include "xl4432.h"
 
-Xl4432::Xl4432(char id[3])
+Xl4432::Xl4432(char id[3], bool use_id_as_sync)
 {
 	nIRQState = 0;
 	meterMeasurment = -1;
@@ -11,23 +11,30 @@ Xl4432::Xl4432(char id[3])
 	METER_ID[0]=id[0];
 	METER_ID[1]=id[1];
 	METER_ID[2]=id[2];
+	useIdAsSync = use_id_as_sync;
 }
 
 
 
 float Xl4432::extractMeterReading()
 {
-  if(packet[5] == METER_ID[0] &&
-     packet[6] == METER_ID[1] &&
-     packet[7] == METER_ID[2])
-     {
+  if (useIdAsSync) {
+    // When using ID as sync, no need to check meter ID (sync already matched it)
+    // Meter reading is directly in bytes 1,2,3
+    float result = float((packet[3]<<16) + (packet[2]<<8) + packet[1])/10;  
+    return result;
+  } else {
+    // Original behavior - meter ID at bytes 5,6,7
+    if(packet[5] == METER_ID[0] &&
+       packet[6] == METER_ID[1] &&
+       packet[7] == METER_ID[2])
+    {
       float result = float((packet[12]<<16) + (packet[11]<<8) + packet[10])/10;  
       return result;
-     }
-  else
-    return -1;
-    
-  
+    }
+    else
+      return -1;
+  }
 }
 
 void Xl4432::readPacketFromFifo()
@@ -90,11 +97,38 @@ void Xl4432::initXl4432Registers()
   spiWriteRegister(0x25, 0xDE);
   spiWriteRegister(0x30, 0xA8);
   spiWriteRegister(0x32, 0x8C);
-  spiWriteRegister(0x33, 0x0A);
-  spiWriteRegister(0x34, 0x07);  //preamble
-  spiWriteRegister(0x35, 0x3A);
-  spiWriteRegister(0x36, 0x3e);  // first sync
-  spiWriteRegister(0x37, 0x69);  // second sync
+  
+  if (useIdAsSync) {
+    // When using meter ID as sync:
+    // - Disable preamble detection completely
+    // - Use 4 sync words
+    // Register 0x33: Header Control 2
+    // Bit 3 = 1 (header length included), Bits [2:0] = 011 (3 = 4-1 sync bytes)
+    spiWriteRegister(0x33, 0x0E);  // 0x0B = 0000 1011: 4 sync words
+    spiWriteRegister(0x34, 0x00);  // Preamble Length: 0 nibbles (no preamble)
+    // Register 0x35: For Manchester with no preamble, we want sync word detection only
+    // Keep bit 5 set to skip preamble detection, other bits as per original
+    spiWriteRegister(0x35, 0x22);  // 0x22: Skip preamble (bit 5=1), keep Manchester sync timing
+    
+    // Set sync words: 0x4B followed by meter ID (MSB first)
+    // Sync words are transmitted/received in order: Sync3, Sync2, Sync1, Sync0
+    spiWriteRegister(0x36, 0x4B);        // Sync Word 3 (transmitted first)
+    spiWriteRegister(0x37, METER_ID[0]); // Sync Word 2 (MSB of meter ID)
+    spiWriteRegister(0x38, METER_ID[1]); // Sync Word 1 (middle byte of meter ID)
+    spiWriteRegister(0x39, METER_ID[2]); // Sync Word 0 (LSB of meter ID, transmitted last)
+    
+    // Log the sync configuration for debugging
+    ESP_LOGD("custom", "TEST MODE: Sync words set to 0x4B 0x%02X 0x%02X 0x%02X", 
+             METER_ID[0], METER_ID[1], METER_ID[2]);
+  } else {
+    // Original configuration with preamble and 2 sync words
+    spiWriteRegister(0x33, 0x0A);  // Sync Word Length: 2 bytes
+    spiWriteRegister(0x34, 0x07);  // Preamble length
+    spiWriteRegister(0x35, 0x3A);  // Preamble Detection Control
+    spiWriteRegister(0x36, 0x3e);  // first sync
+    spiWriteRegister(0x37, 0x69);  // second sync
+  }
+  
   spiWriteRegister(0x3E, 0x28);  //length of packet
   spiWriteRegister(0x6E, 0x01);
   spiWriteRegister(0x6F, 0x3B);
