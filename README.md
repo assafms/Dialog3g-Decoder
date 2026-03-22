@@ -12,7 +12,7 @@ The Arad Dialog 3G is a water meter widely deployed in Israel (916.3 MHz) and ot
 
 ## How it works
 
-The meter transmits a 21-byte packet every ~11 seconds containing the meter ID and consumption reading. The SI4432 receives the packet via FSK/Manchester encoding. The ESPHome component:
+The meter transmits a 21-byte packet every ~30 seconds containing the meter ID and consumption reading. The SI4432 receives the packet via FSK/Manchester encoding. The ESPHome component:
 
 1. Receives the first packet from your meter and **learns** a per-meter validation constant
 2. Validates every subsequent packet using a GF(2) linear scramble check (bytes 15-19)
