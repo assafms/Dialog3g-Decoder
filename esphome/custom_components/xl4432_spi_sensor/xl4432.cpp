@@ -58,8 +58,13 @@ PacketStatus Xl4432::validatePacket()
 	uint64_t thisConstant = deriveConstant();
 
 	if (!constantLearned) {
+		if (thisConstant == learnedConstant && learnedConstant != 0) {
+			// Second consecutive packet agrees — constant confirmed
+			constantLearned = true;
+			return PKT_VALID;
+		}
+		// Store this constant, wait for confirmation
 		learnedConstant = thisConstant;
-		constantLearned = true;
 		return PKT_LEARNING;
 	}
 
