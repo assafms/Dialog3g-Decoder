@@ -59,9 +59,9 @@ sensor:
 
 The old method required 2 identical consecutive readings before publishing. The new GF(2) validation is stronger:
 
-1. **First packet**: the component derives a 40-bit constant from the consumption and scramble bytes (15-19). This constant is stored.
-2. **Every subsequent packet**: the constant is re-derived. If it matches the stored value, the packet is valid and the reading is published to Home Assistant.
-3. **RF errors**: if the constant doesn't match, the packet is silently discarded with a warning log.
+1. **First packet**: the component derives a 40-bit constant from the consumption and scramble bytes (15-19). This constant is stored but not yet confirmed.
+2. **Second packet**: the constant is re-derived. If it matches the stored value, the constant is **locked in** and the reading is published. If different, the new constant replaces the old one and the process restarts.
+3. **All subsequent packets**: validated against the locked constant. Matches are published, mismatches are discarded with a warning log.
 
 This means:
 - Two packets with **different** consumption values can validate each other

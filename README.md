@@ -14,11 +14,12 @@ The Arad Dialog 3G is a water meter widely deployed in Israel (916.3 MHz) and ot
 
 The meter transmits a 21-byte packet every ~30 seconds containing the meter ID and consumption reading. The SI4432 receives the packet via FSK/Manchester encoding. The ESPHome component:
 
-1. Receives the first packet from your meter and **learns** a per-meter validation constant
-2. Validates every subsequent packet using a GF(2) linear scramble check (bytes 15-19)
-3. Only publishes **validated** readings to Home Assistant — RF-corrupted packets are silently discarded
+1. Derives a validation constant from each received packet
+2. Once **two consecutive packets produce the same constant**, it is locked in
+3. All subsequent packets are validated against the locked constant
+4. Only **validated** readings are published to Home Assistant
 
-This replaces the old "wait for 2 identical readings" approach with a much stronger check. Two packets with *different* consumption values can confirm each other.
+This replaces the old "wait for 2 identical readings" approach with a much stronger check. Two packets with *different* consumption values can confirm each other. A single RF-corrupted packet cannot poison the validation — it takes two agreeing packets to lock in the constant.
 
 ## Hardware
 
