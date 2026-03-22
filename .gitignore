@@ -1,0 +1,5 @@
+# Private research files - do not commit
+research/
+docs/
+esphome/secrets.yaml
+esphome/watermeter*.yaml
