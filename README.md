@@ -1,74 +1,92 @@
-custom component for ESPHOME + PCB for the Dialog3G decoder
+# Arad Dialog 3G Water Meter Decoder
 
-the parameters for the XL4432 IC were a guess based on some RF reverse engineering using HackRF
-and are specific the the Israeli version of the water meter. 
+ESPHome custom component + PCB for reading Arad Dialog 3G water meters using an SI4432 (XL4432) RF module and an ESP8266/ESP32.
 
-original post i made a few years ago with more details : https://www.reddit.com/r/RTLSDR/comments/10nri4r/dialog3g_water_meter_reading_now_with_dedicated/
+## What is this?
 
-Post: 
+The Arad Dialog 3G is a water meter widely deployed in Israel (916.3 MHz) and other countries (868/916 MHz). This project provides:
 
-a few years ago I managed to remotely read my ARAD Dialog3G water meter using low cost SDR.
-from the old post:
-" in Israel they are using 916.3Mhz , FSK , Manchester encoding . i use this command in RTL_433 to extract the data : rtl_433 -f 916.0M -s 2400000 -g 280 -a 4 -X "n=myname,modulation=FSK_MC_ZEROBIT,s=8.4,l=8.4,r=3000,invert"  
+- **Custom PCB** connecting an XL4432 module to an ESP via SPI
+- **ESPHome component** that receives and validates meter packets
+- **GF(2) packet validation** — a reverse-engineered integrity check that detects RF bit errors without needing CRC (which Arad disabled)
 
-this has been feeding the results to my home assistance using MQTT , but the need for a raspberry pi just to run the rtl_433 and the SDR was a bit annoying. so using a few images of the device approval from the FCC I recognized the logo of Silicon Labs. guessed that the device they used is SI4432 and purchased one for 2$ in AliExpress. to get the device to work you need to connect to it using SPI , a 4$ ESP32 "Arduino" will do fine and will also push the result back using WiFi. the connections are similar to this https://static.rcgroups.net/forums/attachments/4/0/8/5/8/3/a6555159-46-openlrs.jpg  
+## How it works
 
-To config the SI4432 registers , first calculate the values using the great SIlabs excel they have "Si4432-Register-Settings_RevV-v26" (you can find it in google). the configuration that works in Israel is:
+The meter transmits a 21-byte packet every ~11 seconds containing the meter ID and consumption reading. The SI4432 receives the packet via FSK/Manchester encoding. The ESPHome component:
 
-Modem registers tab  
-Modulation: FSK  
-Manchester: ON  
-Carrier: 916.3  
-RB: 59.45kbps  
-AFC: Disable  
-Freq deviation: 175Khz  
-Rx BW: 600Khz  
-PH+ FIFO Mode tab  
-Enable CRC: No  
-Data invertion:OFF  
-Manchester invert:No  
-Preamble Polarity: 01010  
-Headers: No header  
-Variable packet length: No  
-Preamble length : 7  
-Sync words : for me [0x3E,0x69] works , might be different for you  
-Data length : 0x14  
+1. Receives the first packet from your meter and **learns** a per-meter validation constant
+2. Validates every subsequent packet using a GF(2) linear scramble check (bytes 15-19)
+3. Only publishes **validated** readings to Home Assistant — RF-corrupted packets are silently discarded
 
+This replaces the old "wait for 2 identical readings" approach with a much stronger check. Two packets with *different* consumption values can confirm each other.
 
+## Hardware
 
+- ESP8266 or ESP32 (~$4)
+- XL4432 / SI4432 RF module (~$2)
+- Custom PCB (see `PCB/` directory) or manual wiring via SPI
 
-The end result that works for me :
+Total cost: ~$6
 
-SpiWriteRegister(0x1C, 0x8C)  
-SpiWriteRegister(0x1D, 0x00)  
-SpiWriteRegister(0x20, 0x65)  
-SpiWriteRegister(0x21, 0x00)  
-SpiWriteRegister(0x22, 0xA2)  
-SpiWriteRegister(0x23, 0x57)  
-SpiWriteRegister(0x24, 0x00)  
-SpiWriteRegister(0x25, 0xDE)  
-SpiWriteRegister(0x30, 0xA8)  
-SpiWriteRegister(0x32, 0x8C)  
-SpiWriteRegister(0x33, 0x0A)  
-SpiWriteRegister(0x34, 0x07)  
-SpiWriteRegister(0x35, 0x3A)  
-SpiWriteRegister(0x36, 0x3e)  
-SpiWriteRegister(0x37, 0x69)  
-SpiWriteRegister(0x3E, 0x28)  
-SpiWriteRegister(0x6E, 0x01)  
-SpiWriteRegister(0x6F, 0x3B)  
-SpiWriteRegister(0x70, 0x22)  
-SpiWriteRegister(0x71, 0x26)  
-SpiWriteRegister(0x72, 0x18)  
-SpiWriteRegister(0x75, 0x75)  
-SpiWriteRegister(0x76, 0xCB)  
-SpiWriteRegister(0x77, 0xC0)  
+See the original post for wiring details: [Reddit post](https://www.reddit.com/r/RTLSDR/comments/10nri4r/dialog3g_water_meter_reading_now_with_dedicated/)
 
+## RF Configuration (Israeli version)
 
+| Parameter | Value |
+|-----------|-------|
+| Frequency | 916.3 MHz |
+| Modulation | FSK |
+| Encoding | Manchester |
+| Data Rate | 59.45 kbps |
+| Freq Deviation | 175 kHz |
+| Rx Bandwidth | 600 kHz |
+| Preamble | 7 nibbles |
+| Sync Word | 0x3E 0x69 |
+| CRC | Disabled |
 
-Once you set the registers , you still need to start the RX engine , watch for the interrupts and read the fifo when a new packet is in . I will release my awful Arduino code in a few weeks . more info on this process is in the "AN415_DS.pdf" also available in Silabs site.  
+## Quick Start
 
-bottom line  
+1. Build the PCB or wire the XL4432 to the ESP via SPI
+2. Copy `esphome/custom_components/xl4432_spi_sensor/` to your ESPHome `custom_components/` directory
+3. Add to your YAML:
 
-With ~6$ of hardware , you can remotely read the Israeli version of the Dialog3G water meter. No need (in this specific case for an SDR)
+```yaml
+sensor:
+  - platform: xl4432_spi_sensor
+    name: water_meter
+    cs_pin: GPIO15
+    meter_id: "0x4E61BC"
+    accuracy_decimals: 1
+```
 
+4. Find your meter ID: read the decimal number on the meter, convert to hex, reverse bytes. E.g., `12345678` → hex `0xBC614E` → reversed `0x4E61BC`
+
+## Packet Sniffer Mode
+
+To capture raw packets from all nearby meters (useful for debugging or research):
+
+```yaml
+sensor:
+  - platform: xl4432_spi_sensor
+    name: sniffer
+    cs_pin: GPIO15
+    meter_id: "0x000000"
+    packet_sniff: true
+```
+
+All received packets are logged at INFO level. No data is published to Home Assistant.
+
+## Packet Validation
+
+The component uses a reverse-engineered GF(2) linear function to validate packets. Bytes 15-19 of each packet contain a 40-bit scramble that depends on both the meter ID and the consumption value. The validation:
+
+- Learns the per-meter constant from the first received packet
+- Validates all subsequent packets by checking that the scramble matches the expected value
+- Detects bit errors in the meter ID, consumption, or scramble bytes
+- Works for any consumption value
+
+## Links
+
+- [rtl_433 Protocol 260](https://github.com/merbanan/rtl_433) — SDR-based decoder (no packet validation)
+- [rtl_433 Issue #1992](https://github.com/merbanan/rtl_433/issues/1992) — Original protocol analysis
+- [Master Meter Dialog 3G Manual](https://www.manualslib.com/manual/1555781/Master-Meter-Dialog-3g.html)

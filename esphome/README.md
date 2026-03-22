@@ -1,73 +1,86 @@
-ESPHOME - Dialog 3G decoder 
+# ESPHome Dialog 3G Component
 
-This is a custom component for ESPHOME for the Dialog3G decoder board i created. 
-the parameters for the XL4432 IC were a guess based on some RF reverse engineering using HackRF
-and are specific the the Israeli version of the water meter. 
+Custom ESPHome component for receiving Arad Dialog 3G water meter data using an XL4432/SI4432 RF module.
 
+## Features
 
+- Configurable meter ID via YAML
+- **GF(2) packet validation** — detects RF bit errors using reverse-engineered scramble check
+- Learns per-meter constant automatically from first packet
+- Packet sniffer mode for capturing all nearby meters
+- Last-nibble masking (unreliable due to Manchester timing drift)
 
-Update 18.6.25
---------------
-Added the ability to sniff all meter IDs , change the ID to "123456" to enable
-Added logging to syslog of the raw packets while sniffing . recommended use of visual syslog server (windows) to view 
+## Installation
 
+Copy `custom_components/xl4432_spi_sensor/` to your ESPHome config directory:
 
+```
+config/
+  esphome/
+    your_device.yaml
+    custom_components/
+      xl4432_spi_sensor/
+        __init__.py
+        sensor.py
+        xl4432.cpp
+        xl4432.h
+        xl4432_spi_sensor.cpp
+        xl4432_spi_sensor.h
+```
 
-
-
-Installation
---------------
-copy the directory to the custom_components directory under ESPHOME (or create it)
-Final directory structure in Home assistant 
-
-|-config  
-|---esphome  
-|-----watermeter.yaml  
-|-----secrets.yaml  
-|-----custom_components  
-|-------syslog  
-|---------__init__.py  
-|---------syslog_component.cpp  
-|---------syslog_component.h  
-|-------xl4432_spi_sensor  
-|---------__init__.py  
-|---------sensor.py  
-|---------xl4432.cpp  
-|---------xl4432.h  
-|---------xl4432_spi_sensor.cpp  
-|---------xl4432_spi_sensor.h  
-    
-
-
-
-
-
-Configuration
---------------
-The meter ID can now be configured in the YAML file instead of editing the C++ code.
-
-In your watermeter.yaml file, add the meter_id parameter to the xl4432_spi_sensor configuration:
+## Configuration
 
 ```yaml
 sensor:
   - platform: xl4432_spi_sensor
-    name: xl4432
+    name: water_meter
     cs_pin: GPIO15
     meter_id: "0x4E61BC"
+    accuracy_decimals: 1
 ```
 
-The meter_id format is a single hex string:
-- "0x4E61BC" (with 0x prefix)
-- "4E61BC" (without 0x prefix)
+### Options
 
-To find your meter ID:
-1. Look for the meter ID on your water meter (usually in decimal format)
-2. Convert it to hexadecimal (e.g., 12345678 → 0xBC614E)
-3. Reverse the byte order: 0xBC614E → 0x4E61BC
-4. Use the reversed hex value in the YAML
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `meter_id` | Yes | — | Meter ID as hex string (e.g., `"0x4E61BC"`) |
+| `packet_sniff` | No | `false` | Log all packets, don't publish to HA |
+| `cs_pin` | Yes | — | SPI chip select pin |
+| `accuracy_decimals` | No | `1` | Decimal places for the reading |
 
-Example conversion:
-- Meter ID = 12345678 (decimal)
-- Convert to hex: 0xBC614E
-- Reverse byte order: 0x4E61BC
-- Use in YAML: meter_id: "0x4E61BC"
+### Finding Your Meter ID
+
+1. Read the decimal serial number from your water meter
+2. Convert to hex: e.g., `12345678` → `0xBC614E`
+3. Reverse byte order: `0xBC614E` → `0x4E61BC`
+4. Use in YAML: `meter_id: "0x4E61BC"`
+
+## How Validation Works
+
+The old method required 2 identical consecutive readings before publishing. The new GF(2) validation is stronger:
+
+1. **First packet**: the component derives a 40-bit constant from the consumption and scramble bytes (15-19). This constant is stored.
+2. **Every subsequent packet**: the constant is re-derived. If it matches the stored value, the packet is valid and the reading is published to Home Assistant.
+3. **RF errors**: if the constant doesn't match, the packet is silently discarded with a warning log.
+
+This means:
+- Two packets with **different** consumption values can validate each other
+- Any bit flip in meter ID, consumption, or scramble bytes is detected
+- No need to wait for the exact same reading twice
+
+## Packet Sniffer Mode
+
+Set `packet_sniff: true` to log all received packets at INFO level without filtering by meter ID or publishing to Home Assistant. Useful for:
+- Discovering nearby meter IDs
+- Collecting data for protocol research
+- Debugging reception issues
+
+## SPI Wiring
+
+| ESP Pin | XL4432 Pin |
+|---------|------------|
+| GPIO14 (CLK) | SCK |
+| GPIO13 (MOSI) | SDI |
+| GPIO12 (MISO) | SDO |
+| GPIO15 (CS) | nSEL |
+| GPIO5 | nIRQ |
