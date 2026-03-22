@@ -12,6 +12,7 @@ Xl4432::Xl4432(char id[3], bool use_id_as_sync)
 	METER_ID[1]=id[1];
 	METER_ID[2]=id[2];
 	useIdAsSync = use_id_as_sync;
+	packetSniff = false;
 }
 
 
@@ -23,13 +24,17 @@ float Xl4432::extractMeterReading()
     // Meter reading is directly in bytes 1,2,3
     float result = float((packet[3]<<16) + (packet[2]<<8) + packet[1])/10;  
     return result;
+  } else if (packetSniff) {
+    // Sniff mode: extract reading from any packet, no ID check
+    float result = float((packet[12]<<16) + (packet[11]<<8) + packet[10])/10;
+    return result;
   } else {
     // Original behavior - meter ID at bytes 5,6,7
     if(packet[5] == METER_ID[0] &&
        packet[6] == METER_ID[1] &&
        packet[7] == METER_ID[2])
     {
-      float result = float((packet[12]<<16) + (packet[11]<<8) + packet[10])/10;  
+      float result = float((packet[12]<<16) + (packet[11]<<8) + packet[10])/10;
       return result;
     }
     else

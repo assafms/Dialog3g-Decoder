@@ -16,6 +16,7 @@ class Xl4432 {
 	float lastMeterMeasurment;
 	bool  packetReady;
 	bool  useIdAsSync;
+	bool  packetSniff;
 	void  spiDisableReciver();
 	void  spiEnableReciver();
 	void  checkForNewPacket();

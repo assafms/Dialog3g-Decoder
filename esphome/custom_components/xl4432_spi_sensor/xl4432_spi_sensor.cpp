@@ -15,6 +15,7 @@ static const char *TAG = "xl4432_spi_sensor.sensor";
 char  METER_ID[]= {0x12,0x34,0x56};
 
 // Global xl4432 instance
+bool PACKET_SNIFF = false;
 Xl4432 xl4432(METER_ID);
 
 void Xl4432SPISensor::set_meter_id(const std::string &meter_id) {
@@ -58,6 +59,11 @@ void Xl4432SPISensor::set_meter_id(const std::string &meter_id) {
   }
 }
 
+void Xl4432SPISensor::set_packet_sniff(bool packet_sniff) {
+  PACKET_SNIFF = packet_sniff;
+  xl4432.packetSniff = packet_sniff;
+}
+
 IRAM_ATTR void nIRQ_ISR(){
   xl4432.spiDisableReciver();
   xl4432.checkForNewPacket();
@@ -82,11 +88,21 @@ void Xl4432SPISensor::update() {
 
 void Xl4432SPISensor::loop() {
 
-if(xl4432.packetReady and xl4432.meterMeasurment>0)
+if (!xl4432.packetReady)
+    return;
+
+if (PACKET_SNIFF) {
+    // Sniff mode: log every packet, never publish to HA
+    xl4432.packetReady = 0;
+    ESP_LOGI("sniff", "%s", xl4432.output);
+    return;
+}
+
+if(xl4432.meterMeasurment>0)
     {
       xl4432.packetReady = 0;
-      // We dont have any CRC so we wait for 2 measurments that are the same 
-      // before we send the information to HA 
+      // We dont have any CRC so we wait for 2 measurments that are the same
+      // before we send the information to HA
       if (xl4432.meterMeasurment == xl4432.lastMeterMeasurment){
           publish_state(xl4432.meterMeasurment);
           ESP_LOGD("custom","Raw Packet:%s",xl4432.output);
@@ -95,13 +111,13 @@ if(xl4432.packetReady and xl4432.meterMeasurment>0)
         xl4432.lastMeterMeasurment = xl4432.meterMeasurment;
         ESP_LOGD("custom","Raw Packet:%s",xl4432.output);
         ESP_LOGD("custom","Value has changed , waiting for another");
-           
+
       }
-      
-	  
+
+
     }
 
-if(xl4432.packetReady and xl4432.meterMeasurment<0)
+if(xl4432.meterMeasurment<0)
     {
       xl4432.packetReady = 0;
 	    ESP_LOGD("custom","Unknown Packet:%s",xl4432.output);

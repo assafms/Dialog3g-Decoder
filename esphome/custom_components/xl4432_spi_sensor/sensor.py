@@ -12,6 +12,7 @@ Xl4432SPISensor = xl4432_spi_sensor_ns.class_('Xl4432SPISensor', cg.PollingCompo
 CONFIG_SCHEMA = sensor.sensor_schema(unit_of_measurement=UNIT_EMPTY,icon=ICON_EMPTY, accuracy_decimals=1).extend({
     cv.GenerateID(): cv.declare_id(Xl4432SPISensor),
     cv.Required('meter_id'): cv.string,
+    cv.Optional('packet_sniff', default=False): cv.boolean,
 }).extend(cv.polling_component_schema('5s')).extend(spi.spi_device_schema())
 
 
@@ -24,4 +25,5 @@ def to_code(config):
     # Set the meter ID
     meter_id_str = config['meter_id']
     cg.add(var.set_meter_id(meter_id_str))
+    cg.add(var.set_packet_sniff(config['packet_sniff']))
     

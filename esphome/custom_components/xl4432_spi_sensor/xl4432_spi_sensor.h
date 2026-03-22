@@ -20,6 +20,7 @@ class Xl4432SPISensor : public sensor::Sensor,
   void loop() override;
   void dump_config() override;
   void set_meter_id(const std::string &meter_id);
+  void set_packet_sniff(bool packet_sniff);
 };
 
 }  // namespace xl4432_spi_sensor
