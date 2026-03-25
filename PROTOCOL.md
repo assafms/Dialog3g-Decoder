@@ -30,7 +30,7 @@ Reverse-engineered protocol documentation for the Arad Dialog 3G water meter (Is
 | 0–1   | Static header     | Always `0x0A 0xEC` |
 | 2     | Header variant    | Usually `0x7A`. `0x6A` seen on some meters |
 | 3–4   | Type bytes        | Usually `0xC8 0x4B`. `0x6B` for some meter types |
-| 5–7   | **Meter ID**      | 3 bytes, little-endian (see below) |
+| 5–7   | **Meter ID**      | 3 bytes, big-endian (see below) |
 | 8–9   | Flags / unknown   | `0x00 0x00` standard. `0x3D 0x0C` on some types |
 | 10–12 | **Consumption**   | 3 bytes, little-endian, 24-bit. Divide by 10 for m³ |
 | 13    | Unknown           | Almost always `0x00` |
@@ -40,9 +40,16 @@ Reverse-engineered protocol documentation for the Arad Dialog 3G water meter (Is
 
 ### Meter ID Encoding
 
-The physical decimal serial number is converted to hex and transmitted little-endian.
+The physical decimal serial number is converted to hex and transmitted **big-endian** (MSB first).
 
-Example: serial `09444602` → hex `0x901CFA` → transmitted as bytes `FA 1C 90`.
+Example: serial `09444602` → hex `0x901CFA` → transmitted as bytes `90 1C FA`.
+
+**Important**: The meter ID for the scramble algorithm uses big-endian byte order:
+```
+meter_id = (pkt[5] << 16) | (pkt[6] << 8) | pkt[7]
+```
+
+Note: consumption is still **little-endian**.
 
 ### Consumption
 
@@ -72,7 +79,7 @@ Where:
 ### Constants
 
 ```
-OFFSET = 0x2CA2C00A20
+OFFSET = 0xDF750DC2C0
 ```
 
 ### Consumption Basis Vectors (M_cons)
@@ -103,14 +110,14 @@ Applied to bits 0–23 of the meter ID.
 
 | Bit | Vector             | Confidence |
 |-----|--------------------|------------|
-| 0   | `0x456FF2CC60`     | Proven     |
-| 1   | `0x8ADE6AAE08`     | Proven     |
-| 2   | `0xCE131FAF10`     | Proven     |
-| 3   | `0x43236C06E8`     | High       |
-| 4   | `0x6D4316D2E0`     | Proven     |
-| 5   | `0xFE87F7B1D0`     | Proven     |
-| 6   | `0x121BB45520`     | High       |
-| 7   | `0x348D237BD0`     | High       |
+| 0   | `0x456FF2CC60`     | Solid      |
+| 1   | `0x8ADE6AAE08`     | Solid      |
+| 2   | `0x35AD159778`     | RANSAC 105/126 |
+| 3   | `0x4B4AABF660`     | RANSAC 105/126 |
+| 4   | `0x9694D8DA08`     | RANSAC 105/126 |
+| 5   | `0x0D39FE49B0`     | RANSAC 105/126 |
+| 6   | `0x1A7273A5A8`     | RANSAC 105/126 |
+| 7   | `0x34E4E74B50`     | RANSAC 105/126 |
 | 8   | `0x49D8C178F8`     | Proven     |
 | 9   | `0xB3A08D1FA8`     | Proven     |
 | 10  | `0x475155C2F0`     | Proven     |
@@ -165,7 +172,7 @@ Useful when the ID basis matrix is not available, or for maximum reliability:
 #include <stdint.h>
 #include <stdbool.h>
 
-static const uint64_t OFFSET = 0x2CA2C00A20ULL;
+static const uint64_t OFFSET = 0xDF750DC2C0ULL;
 
 static const uint64_t CONS_BASIS[15] = {
     0x61B89FB6A0ULL, 0xE360308318ULL, 0xC6C12115C8ULL, 0xAD9382E0F8ULL,
@@ -175,15 +182,17 @@ static const uint64_t CONS_BASIS[15] = {
 };
 
 static const uint64_t ID_BASIS[24] = {
-    0x456FF2CC60ULL, 0x8ADE6AAE08ULL, 0xCE131FAF10ULL, 0x43236C06E8ULL,
-    0x6D4316D2E0ULL, 0xFE87F7B1D0ULL, 0x121BB45520ULL, 0x348D237BD0ULL,
+    0x456FF2CC60ULL, 0x8ADE6AAE08ULL, 0x35AD159778ULL, 0x4B4AABF660ULL,
+    0x9694D8DA08ULL, 0x0D39FE49B0ULL, 0x1A7273A5A8ULL, 0x34E4E74B50ULL,
     0x49D8C178F8ULL, 0xB3A08D1FA8ULL, 0x475155C2F0ULL, 0x8EA2AB85E0ULL,
     0x3D5518F660ULL, 0x7AAA31ECC0ULL, 0xD544E30110ULL, 0xAA89092710ULL,
     0x7503D28548ULL, 0xEA062A3C58ULL, 0xD40D146B48ULL, 0xA81B68C568ULL,
     0x5037919928ULL, 0xA06EAC0498ULL, 0x40DD972C00ULL, 0xA1AA21B658ULL,
 };
 
-/* Compute expected scrambled bytes from meter ID and consumption */
+/* Compute expected scrambled bytes from meter ID and consumption.
+   meter_id is big-endian: (pkt[5] << 16) | (pkt[6] << 8) | pkt[7]
+   consumption is little-endian: pkt[10] | (pkt[11] << 8) | (pkt[12] << 16) */
 uint64_t expected_scramble(uint32_t meter_id, uint32_t consumption) {
     uint64_t result = OFFSET;
     for (int i = 0; i < 24; i++) {
@@ -216,7 +225,7 @@ uint64_t derive_constant(uint32_t consumption, uint64_t scrambled) {
 ### Python Implementation
 
 ```python
-OFFSET = 0x2CA2C00A20
+OFFSET = 0xDF750DC2C0
 
 CONS_BASIS = [
     0x61B89FB6A0, 0xE360308318, 0xC6C12115C8, 0xAD9382E0F8,
@@ -226,8 +235,8 @@ CONS_BASIS = [
 ]
 
 ID_BASIS = [
-    0x456FF2CC60, 0x8ADE6AAE08, 0xCE131FAF10, 0x43236C06E8,
-    0x6D4316D2E0, 0xFE87F7B1D0, 0x121BB45520, 0x348D237BD0,
+    0x456FF2CC60, 0x8ADE6AAE08, 0x35AD159778, 0x4B4AABF660,
+    0x9694D8DA08, 0x0D39FE49B0, 0x1A7273A5A8, 0x34E4E74B50,
     0x49D8C178F8, 0xB3A08D1FA8, 0x475155C2F0, 0x8EA2AB85E0,
     0x3D5518F660, 0x7AAA31ECC0, 0xD544E30110, 0xAA89092710,
     0x7503D28548, 0xEA062A3C58, 0xD40D146B48, 0xA81B68C568,

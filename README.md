@@ -84,7 +84,7 @@ This provides strong error detection from the very first packet — no warm-up p
 |---------|-------|-------------|
 | 0-1 | Header | Static (`0x0A 0xEC`) |
 | 2-4 | Type | Meter type / firmware variant |
-| 5-7 | Meter ID | 3 bytes, little-endian |
+| 5-7 | Meter ID | 3 bytes, big-endian |
 | 8-9 | Flags | Usually `0x00 0x00` |
 | 10-12 | Consumption | 3 bytes, little-endian. Divide by 10 for m3 |
 | 13-14 | Status | Usually `0x00 0x05` |
@@ -100,7 +100,7 @@ scrambled = OFFSET ^ M_id(meter_id) ^ M_cons(consumption)
 ```
 
 Where:
-- **OFFSET** is a global 40-bit constant (`0x2CA2C00A20`)
+- **OFFSET** is a global 40-bit constant (`0xDF750DC2C0`)
 - **M_id** is a 40x24 binary matrix applied to the 24-bit meter ID
 - **M_cons** is a 40x15 binary matrix applied to the lower 15 bits of the consumption value
 - **^** is bitwise XOR (all arithmetic is over GF(2))
@@ -128,12 +128,12 @@ Consumption bits 15-23 have no effect on the scrambled output.
 |-----|--------|-----|--------|
 | 0 | `0x456FF2CC60` | 12 | `0x3D5518F660` |
 | 1 | `0x8ADE6AAE08` | 13 | `0x7AAA31ECC0` |
-| 2 | `0xCE131FAF10` | 14 | `0xD544E30110` |
-| 3 | `0x43236C06E8` | 15 | `0xAA89092710` |
-| 4 | `0x6D4316D2E0` | 16 | `0x7503D28548` |
-| 5 | `0xFE87F7B1D0` | 17 | `0xEA062A3C58` |
-| 6 | `0x121BB45520` | 18 | `0xD40D146B48` |
-| 7 | `0x348D237BD0` | 19 | `0xA81B68C568` |
+| 2 | `0x35AD159778` | 14 | `0xD544E30110` |
+| 3 | `0x4B4AABF660` | 15 | `0xAA89092710` |
+| 4 | `0x9694D8DA08` | 16 | `0x7503D28548` |
+| 5 | `0x0D39FE49B0` | 17 | `0xEA062A3C58` |
+| 6 | `0x1A7273A5A8` | 18 | `0xD40D146B48` |
+| 7 | `0x34E4E74B50` | 19 | `0xA81B68C568` |
 | 8 | `0x49D8C178F8` | 20 | `0x5037919928` |
 | 9 | `0xB3A08D1FA8` | 21 | `0xA06EAC0498` |
 | 10 | `0x475155C2F0` | 22 | `0x40DD972C00` |
