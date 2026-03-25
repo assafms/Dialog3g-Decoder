@@ -1,14 +1,13 @@
 # ESPHome Dialog 3G Component
 
-Custom ESPHome component for receiving Arad Dialog 3G water meter data using an XL4432/SI4432 RF module.
+Custom ESPHome component for receiving and validating Arad Dialog 3G water meter transmissions using an XL4432/SI4432 RF module.
 
 ## Features
 
+- Single-packet GF(2) validation — every packet is independently verified
 - Configurable meter ID via YAML
-- **GF(2) packet validation** — detects RF bit errors using reverse-engineered scramble check
-- Learns per-meter constant automatically from first packet
-- Packet sniffer mode for capturing all nearby meters
-- Last-nibble masking (unreliable due to Manchester timing drift)
+- Packet sniffer mode for discovering meters and debugging
+- Automatic low-nibble masking on byte 20 (unreliable due to Manchester timing drift)
 
 ## Installation
 
@@ -16,16 +15,15 @@ Copy `custom_components/xl4432_spi_sensor/` to your ESPHome config directory:
 
 ```
 config/
-  esphome/
-    your_device.yaml
-    custom_components/
-      xl4432_spi_sensor/
-        __init__.py
-        sensor.py
-        xl4432.cpp
-        xl4432.h
-        xl4432_spi_sensor.cpp
-        xl4432_spi_sensor.h
+  your_device.yaml
+  custom_components/
+    xl4432_spi_sensor/
+      __init__.py
+      sensor.py
+      xl4432.cpp
+      xl4432.h
+      xl4432_spi_sensor.cpp
+      xl4432_spi_sensor.h
 ```
 
 ## Configuration
@@ -44,43 +42,43 @@ sensor:
 | Option | Required | Default | Description |
 |--------|----------|---------|-------------|
 | `meter_id` | Yes | — | Meter ID as hex string (e.g., `"0x4E61BC"`) |
-| `packet_sniff` | No | `false` | Log all packets, don't publish to HA |
 | `cs_pin` | Yes | — | SPI chip select pin |
-| `accuracy_decimals` | No | `1` | Decimal places for the reading |
+| `packet_sniff` | No | `false` | Log all packets without filtering or publishing |
+| `accuracy_decimals` | No | `1` | Decimal places for the consumption reading |
 
 ### Finding Your Meter ID
 
-1. Read the decimal serial number from your water meter
-2. Convert to hex: e.g., `12345678` → `0xBC614E`
-3. Reverse byte order: `0xBC614E` → `0x4E61BC`
-4. Use in YAML: `meter_id: "0x4E61BC"`
+1. Read the decimal serial number printed on the meter
+2. Convert to hexadecimal
+3. Reverse the byte order
+4. Use in YAML config
+
+Example: decimal `5136830` -> hex `0x4E61BE` -> reversed `0xBE614E` -> `meter_id: "0xBE614E"`
 
 ## How Validation Works
 
-The old method required 2 identical consecutive readings before publishing. The new GF(2) validation is stronger:
+Bytes 15-19 of each packet contain a 40-bit scrambled value that is a deterministic GF(2) linear function of the meter ID and consumption reading. The component computes the expected scramble from the packet data and compares it to the received value.
 
-1. **First packet**: the component derives a 40-bit constant from the consumption and scramble bytes (15-19). This constant is stored but not yet confirmed.
-2. **Second packet**: the constant is re-derived. If it matches the stored value, the constant is **locked in** and the reading is published. If different, the new constant replaces the old one and the process restarts.
-3. **All subsequent packets**: validated against the locked constant. Matches are published, mismatches are discarded with a warning log.
+- **Valid**: expected scramble matches received — reading is published to Home Assistant
+- **Invalid**: mismatch detected — packet is discarded (logged as warning)
+- **ID mismatch**: packet is from a different meter — silently ignored
 
-This means:
-- Two packets with **different** consumption values can validate each other
-- Any bit flip in meter ID, consumption, or scramble bytes is detected
-- No need to wait for the exact same reading twice
+Every packet is validated on its own. No learning phase, no warm-up, no dependency on previous packets.
 
 ## Packet Sniffer Mode
 
-Set `packet_sniff: true` to log all received packets at INFO level without filtering by meter ID or publishing to Home Assistant. Useful for:
+Set `packet_sniff: true` to log all received packets at INFO level without filtering or validation. Useful for:
+
 - Discovering nearby meter IDs
-- Collecting data for protocol research
-- Debugging reception issues
+- Collecting packet data for analysis
+- Debugging RF reception
 
 ## SPI Wiring
 
-| ESP Pin | XL4432 Pin |
-|---------|------------|
-| GPIO14 (CLK) | SCK |
-| GPIO13 (MOSI) | SDI |
-| GPIO12 (MISO) | SDO |
-| GPIO15 (CS) | nSEL |
-| GPIO5 | nIRQ |
+| ESP Pin | XL4432 Pin | Function |
+|---------|------------|----------|
+| GPIO14 | SCK | SPI Clock |
+| GPIO13 | SDI | SPI MOSI |
+| GPIO12 | SDO | SPI MISO |
+| GPIO15 | nSEL | Chip Select |
+| GPIO5 | nIRQ | Interrupt |

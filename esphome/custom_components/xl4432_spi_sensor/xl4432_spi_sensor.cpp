@@ -82,29 +82,17 @@ if (PACKET_SNIFF) {
 
 PacketStatus status = xl4432.validatePacket();
 
-uint64_t pktConst = xl4432.deriveConstant();
-uint32_t constHi = (uint32_t)(pktConst >> 16);
-uint32_t constLo = (uint32_t)(pktConst & 0xFFFF);
-
 switch (status) {
-    case PKT_LEARNING:
-        ESP_LOGI("gf2", "Learning: const=0x%06X%04X reading=%.1f pkt=%s",
-                 constHi, constLo, xl4432.meterMeasurment, xl4432.output);
-        break;
-
     case PKT_VALID:
         publish_state(xl4432.meterMeasurment);
-        ESP_LOGI("gf2", "Valid: const=0x%06X%04X reading=%.1f pkt=%s",
-                 constHi, constLo, xl4432.meterMeasurment, xl4432.output);
+        ESP_LOGI("gf2", "Valid: reading=%.1f pkt=%s",
+                 xl4432.meterMeasurment, xl4432.output);
         break;
 
-    case PKT_INVALID: {
-        uint32_t lrnHi = (uint32_t)(xl4432.learnedConstant >> 16);
-        uint32_t lrnLo = (uint32_t)(xl4432.learnedConstant & 0xFFFF);
-        ESP_LOGW("gf2", "RF error: got=0x%06X%04X expected=0x%06X%04X pkt=%s",
-                 constHi, constLo, lrnHi, lrnLo, xl4432.output);
+    case PKT_INVALID:
+        ESP_LOGW("gf2", "RF error: reading=%.1f pkt=%s",
+                 xl4432.meterMeasurment, xl4432.output);
         break;
-    }
 
     case PKT_ID_MISMATCH:
         ESP_LOGD("gf2", "Other meter: %s", xl4432.output);

@@ -7,7 +7,6 @@
 #define PACKET_SIZE  0x15
 
 enum PacketStatus {
-  PKT_LEARNING,
   PKT_VALID,
   PKT_INVALID,
   PKT_ID_MISMATCH,
@@ -25,14 +24,12 @@ class Xl4432 {
 	bool  packetReady;
 	bool  useIdAsSync;
 	bool  packetSniff;
-	bool  constantLearned;
-	uint64_t learnedConstant;
 	void  spiDisableReciver();
 	void  spiEnableReciver();
 	void  checkForNewPacket();
 	void  initXl4432Registers();
 	Xl4432(char id[3], bool use_id_as_sync = false);
-	uint64_t deriveConstant();
+	uint64_t expectedScramble();
 	PacketStatus validatePacket();
 
   private:

@@ -2,12 +2,22 @@
 #include "xl4432_spi_sensor.h"
 #include "xl4432.h"
 
-// Consumption basis vectors (bits 0-14, universal across all meter types)
+static const uint64_t OFFSET = 0x2CA2C00A20ULL;
+
 static const uint64_t CONS_BASIS[15] = {
     0x61B89FB6A0ULL, 0xE360308318ULL, 0xC6C12115C8ULL, 0xAD9382E0F8ULL,
     0x7B374A3C50ULL, 0xF66E9478A0ULL, 0xECDDE7D470ULL, 0xF9AB805540ULL,
     0xA045A72F80ULL, 0x408B817A30ULL, 0xA1060D1A38ULL, 0x420D5A2788ULL,
     0x841AB44F10ULL, 0x0835A7BB10ULL, 0x106AC040E8ULL,
+};
+
+static const uint64_t ID_BASIS[24] = {
+    0x456FF2CC60ULL, 0x8ADE6AAE08ULL, 0xCE131FAF10ULL, 0x43236C06E8ULL,
+    0x6D4316D2E0ULL, 0xFE87F7B1D0ULL, 0x121BB45520ULL, 0x348D237BD0ULL,
+    0x49D8C178F8ULL, 0xB3A08D1FA8ULL, 0x475155C2F0ULL, 0x8EA2AB85E0ULL,
+    0x3D5518F660ULL, 0x7AAA31ECC0ULL, 0xD544E30110ULL, 0xAA89092710ULL,
+    0x7503D28548ULL, 0xEA062A3C58ULL, 0xD40D146B48ULL, 0xA81B68C568ULL,
+    0x5037919928ULL, 0xA06EAC0498ULL, 0x40DD972C00ULL, 0xA1AA21B658ULL,
 };
 
 Xl4432::Xl4432(char id[3], bool use_id_as_sync)
@@ -21,17 +31,17 @@ Xl4432::Xl4432(char id[3], bool use_id_as_sync)
 	METER_ID[2] = id[2];
 	useIdAsSync = use_id_as_sync;
 	packetSniff = false;
-	constantLearned = false;
-	learnedConstant = 0;
 }
 
-uint64_t Xl4432::deriveConstant()
+uint64_t Xl4432::expectedScramble()
 {
+	uint32_t meter_id = ((uint32_t)packet[5] << 16) | ((uint32_t)packet[6] << 8) | packet[7];
 	uint32_t cons = packet[10] | (packet[11] << 8) | ((uint32_t)packet[12] << 16);
-	uint64_t scram = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
-	                 ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
-	                 (uint64_t)packet[19];
-	uint64_t result = scram;
+	uint64_t result = OFFSET;
+	for (int i = 0; i < 24; i++) {
+		if (meter_id & (1 << i))
+			result ^= ID_BASIS[i];
+	}
 	for (int i = 0; i < 15; i++) {
 		if (cons & (1 << i))
 			result ^= CONS_BASIS[i];
@@ -55,20 +65,12 @@ PacketStatus Xl4432::validatePacket()
 	if (!idMatch)
 		return PKT_ID_MISMATCH;
 
-	uint64_t thisConstant = deriveConstant();
+	uint64_t expected = expectedScramble();
+	uint64_t actual = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
+	                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
+	                  (uint64_t)packet[19];
 
-	if (!constantLearned) {
-		if (thisConstant == learnedConstant && learnedConstant != 0) {
-			// Second consecutive packet agrees — constant confirmed
-			constantLearned = true;
-			return PKT_VALID;
-		}
-		// Store this constant, wait for confirmation
-		learnedConstant = thisConstant;
-		return PKT_LEARNING;
-	}
-
-	if (thisConstant == learnedConstant)
+	if (expected == actual)
 		return PKT_VALID;
 	else
 		return PKT_INVALID;
