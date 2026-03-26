@@ -82,6 +82,22 @@ sensor:
 
 All received packets are logged at INFO level. No validation or filtering is performed.
 
+## Wireless Connection
+
+Add `tcp_server: true` to stream packets over WiFi to the Android collector app instead of USB:
+
+```yaml
+sensor:
+  - platform: xl4432_spi_sensor
+    name: sniffer
+    cs_pin: GPIO15
+    meter_id: "0x000000"
+    packet_sniff: true
+    tcp_server: true
+```
+
+Enable phone hotspot, configure ESPHome WiFi with the hotspot credentials, and the Android app auto-discovers the ESP on port 4321.
+
 ## Packet Structure
 
 | Byte(s) | Field | Description |
