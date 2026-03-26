@@ -63,6 +63,33 @@ void Xl4432SPISensor::setup() {
     attachInterrupt(nIRQ_PIN, nIRQ_ISR, FALLING);
     xl4432.initXl4432Registers();
     xl4432.lastMeterMeasurment = 0;
+#ifdef USE_ARDUINO
+    tcp_server_.begin();
+    ESP_LOGI(TAG, "TCP sniff server on port %d", SNIFF_TCP_PORT);
+#endif
+}
+
+void Xl4432SPISensor::send_to_clients(const char *line) {
+#ifdef USE_ARDUINO
+    // Accept new connections
+    WiFiClient newClient = tcp_server_.available();
+    if (newClient) {
+        for (int i = 0; i < 3; i++) {
+            if (!tcp_clients_[i] || !tcp_clients_[i].connected()) {
+                tcp_clients_[i] = newClient;
+                ESP_LOGI(TAG, "TCP client %d connected", i);
+                break;
+            }
+        }
+    }
+    // Send to all connected clients
+    for (int i = 0; i < 3; i++) {
+        if (tcp_clients_[i] && tcp_clients_[i].connected()) {
+            tcp_clients_[i].print(line);
+            tcp_clients_[i].print("\n");
+        }
+    }
+#endif
 }
 
 void Xl4432SPISensor::update() {
@@ -70,10 +97,33 @@ void Xl4432SPISensor::update() {
 
 void Xl4432SPISensor::loop() {
 
+#ifdef USE_ARDUINO
+// Accept pending TCP connections even when no packets
+{
+    WiFiClient newClient = tcp_server_.available();
+    if (newClient) {
+        for (int i = 0; i < 3; i++) {
+            if (!tcp_clients_[i] || !tcp_clients_[i].connected()) {
+                tcp_clients_[i] = newClient;
+                ESP_LOGI(TAG, "TCP client %d connected", i);
+                break;
+            }
+        }
+    }
+}
+#endif
+
 if (!xl4432.packetReady)
     return;
 
 xl4432.packetReady = 0;
+
+// Always send to TCP clients (sniff format)
+{
+    char tcp_line[64];
+    snprintf(tcp_line, sizeof(tcp_line), "[sniff:916300000]: %s", xl4432.output);
+    send_to_clients(tcp_line);
+}
 
 if (PACKET_SNIFF) {
     ESP_LOGI("sniff", "%s", xl4432.output);
