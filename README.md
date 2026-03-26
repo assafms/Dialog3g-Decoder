@@ -142,7 +142,7 @@ Bits 0-14 proven via transition analysis. Bits 15-16 confirmed by multiple meter
 | 10 | `0x475155C2F0` | 22 | `0x40DD972C00` |
 | 11 | `0x8EA2AB85E0` | 23 | `0xA1AA21B658` |
 
-All 24 vectors proven: bits 0,1,4 by physical serial numbers, bits 2,3,5,6 by physical meter readings (93D9E9, 5579DE, 082CD3, 5E2EE8) + RANSAC 71/72, bit 7 confirmed zero, bits 8-23 stable across all solves. Non-standard meters use different ID matrices (unsolved).
+Bits 0,1,4 proven by physical serial numbers. Bits 3,5,6 proven by physical meter readings (93D9E9, 082CD3, 5E2EE8). Bit 2 supported by RANSAC 71/72 (no physical verification yet). Bit 7 confirmed zero. Bits 8-23 stable across all solves. Non-standard meters use different ID matrices (unsolved).
 
 ### Validation Methods
 
