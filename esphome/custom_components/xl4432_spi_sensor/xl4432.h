@@ -8,6 +8,7 @@
 
 enum PacketStatus {
   PKT_VALID,
+  PKT_VALID_TWO_PKT,
   PKT_INVALID,
   PKT_ID_MISMATCH,
   PKT_NON_STANDARD,
@@ -31,7 +32,10 @@ class Xl4432 {
 	void  initXl4432Registers();
 	Xl4432(char id[3], bool use_id_as_sync = false);
 	uint64_t expectedScramble();
+	uint64_t deriveConstant();
 	PacketStatus validatePacket();
+	uint64_t storedConstant;
+	bool     hasStoredConstant;
 
   private:
 	float extractMeterReading();

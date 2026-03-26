@@ -4,13 +4,12 @@
 
 static const uint64_t OFFSET = 0xDF750DC2C0ULL;
 
-static const uint64_t CONS_BASIS[24] = {
+static const uint64_t CONS_BASIS[17] = {
     0x61B89FB6A0ULL, 0xE360308318ULL, 0xC6C12115C8ULL, 0xAD9382E0F8ULL,
     0x7B374A3C50ULL, 0xF66E9478A0ULL, 0xECDDE7D470ULL, 0xF9AB805540ULL,
     0xA045A72F80ULL, 0x408B817A30ULL, 0xA1060D1A38ULL, 0x420D5A2788ULL,
     0x841AB44F10ULL, 0x0835A7BB10ULL, 0x106AC040E8ULL, 0x20D40FB718ULL,
-    0x51AAF3D980ULL, 0x8344E85D58ULL, 0xAE780AF8B0ULL, 0x588EB97CC0ULL,
-    0xC61102D588ULL, 0x281D9CE978ULL, 0x8188692EF8ULL, 0x0000000000ULL,
+    0x51AAF3D980ULL,
 };
 
 static const uint64_t ID_BASIS[24] = {
@@ -28,6 +27,8 @@ Xl4432::Xl4432(char id[3], bool use_id_as_sync)
 	meterMeasurment = -1;
 	packetReady = 0;
 	lastMeterMeasurment = 0;
+	storedConstant = 0;
+	hasStoredConstant = false;
 	METER_ID[0] = id[0];
 	METER_ID[1] = id[1];
 	METER_ID[2] = id[2];
@@ -44,7 +45,21 @@ uint64_t Xl4432::expectedScramble()
 		if (meter_id & (1 << i))
 			result ^= ID_BASIS[i];
 	}
-	for (int i = 0; i < 24; i++) {
+	for (int i = 0; i < 17; i++) {
+		if (cons & (1 << i))
+			result ^= CONS_BASIS[i];
+	}
+	return result;
+}
+
+uint64_t Xl4432::deriveConstant()
+{
+	uint32_t cons = packet[10] | (packet[11] << 8) | ((uint32_t)packet[12] << 16);
+	uint64_t actual = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
+	                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
+	                  (uint64_t)packet[19];
+	uint64_t result = actual;
+	for (int i = 0; i < 17; i++) {
 		if (cons & (1 << i))
 			result ^= CONS_BASIS[i];
 	}
@@ -67,17 +82,27 @@ PacketStatus Xl4432::validatePacket()
 	if (!idMatch)
 		return PKT_ID_MISMATCH;
 
-	// Only standard meters (bytes 8-9 = 0x00 0x00) use this matrix
-	if (packet[8] != 0x00 || packet[9] != 0x00)
-		return PKT_NON_STANDARD;
+	// Standard meters: full GF(2) validation
+	if (packet[8] == 0x00 && packet[9] == 0x00) {
+		uint64_t expected = expectedScramble();
+		uint64_t actual = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
+		                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
+		                  (uint64_t)packet[19];
+		if (expected == actual)
+			return PKT_VALID;
+		else
+			return PKT_INVALID;
+	}
 
-	uint64_t expected = expectedScramble();
-	uint64_t actual = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
-	                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
-	                  (uint64_t)packet[19];
-
-	if (expected == actual)
-		return PKT_VALID;
+	// Non-standard meters (x40, 3D0C, etc): two-packet validation
+	uint64_t constant = deriveConstant();
+	if (!hasStoredConstant) {
+		storedConstant = constant;
+		hasStoredConstant = true;
+		return PKT_NON_STANDARD;  // first packet, can't validate yet
+	}
+	if (constant == storedConstant)
+		return PKT_VALID_TWO_PKT;
 	else
 		return PKT_INVALID;
 }
