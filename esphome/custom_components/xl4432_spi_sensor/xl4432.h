@@ -10,6 +10,7 @@ enum PacketStatus {
   PKT_VALID,
   PKT_INVALID,
   PKT_ID_MISMATCH,
+  PKT_NON_STANDARD,
   PKT_SNIFF,
 };
 

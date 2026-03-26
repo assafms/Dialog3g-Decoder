@@ -67,6 +67,10 @@ PacketStatus Xl4432::validatePacket()
 	if (!idMatch)
 		return PKT_ID_MISMATCH;
 
+	// Only standard meters (bytes 8-9 = 0x00 0x00) use this matrix
+	if (packet[8] != 0x00 || packet[9] != 0x00)
+		return PKT_NON_STANDARD;
+
 	uint64_t expected = expectedScramble();
 	uint64_t actual = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
 	                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |

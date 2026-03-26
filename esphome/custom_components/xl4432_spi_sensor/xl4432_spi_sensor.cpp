@@ -98,6 +98,11 @@ switch (status) {
         ESP_LOGD("gf2", "Other meter: %s", xl4432.output);
         break;
 
+    case PKT_NON_STANDARD:
+        ESP_LOGW("gf2", "Non-standard (x40/3D0C): reading=%.1f pkt=%s",
+                 xl4432.meterMeasurment, xl4432.output);
+        break;
+
     default:
         break;
 }
