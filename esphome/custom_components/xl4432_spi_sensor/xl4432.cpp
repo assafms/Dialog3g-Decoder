@@ -4,13 +4,16 @@
 
 static const uint64_t OFFSET = 0xDF750DC2C0ULL;
 
-static const uint64_t CONS_BASIS[17] = {
+static const uint64_t CONS_BASIS[24] = {
     0x61B89FB6A0ULL, 0xE360308318ULL, 0xC6C12115C8ULL, 0xAD9382E0F8ULL,
     0x7B374A3C50ULL, 0xF66E9478A0ULL, 0xECDDE7D470ULL, 0xF9AB805540ULL,
     0xA045A72F80ULL, 0x408B817A30ULL, 0xA1060D1A38ULL, 0x420D5A2788ULL,
     0x841AB44F10ULL, 0x0835A7BB10ULL, 0x106AC040E8ULL, 0x20D40FB718ULL,
-    0x51AAF3D980ULL,
+    0x51AAF3D980ULL, 0x2826118BE0ULL, 0xADEBE64938ULL, 0x2D02BFE790ULL,
+    0x5A04F0F9E8ULL, 0xB4086EC518ULL, 0xC0E088FEF8ULL, 0xD022B40558ULL,
 };
+
+static const uint64_t X40_OFFSET = 0xAAF90B5990ULL;
 
 static const uint64_t ID_BASIS[24] = {
     0x456FF2CC60ULL, 0x8ADE6AAE08ULL, 0x0149F2DC28ULL, 0x7FAE4CBD30ULL,
@@ -45,7 +48,7 @@ uint64_t Xl4432::expectedScramble()
 		if (meter_id & (1 << i))
 			result ^= ID_BASIS[i];
 	}
-	for (int i = 0; i < 17; i++) {
+	for (int i = 0; i < 24; i++) {
 		if (cons & (1 << i))
 			result ^= CONS_BASIS[i];
 	}
@@ -59,7 +62,7 @@ uint64_t Xl4432::deriveConstant()
 	                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
 	                  (uint64_t)packet[19];
 	uint64_t result = actual;
-	for (int i = 0; i < 17; i++) {
+	for (int i = 0; i < 24; i++) {
 		if (cons & (1 << i))
 			result ^= CONS_BASIS[i];
 	}
@@ -94,12 +97,34 @@ PacketStatus Xl4432::validatePacket()
 			return PKT_INVALID;
 	}
 
-	// Non-standard meters (x40, 3D0C, etc): two-packet validation
+	// x40/Sonata meters: same ID_BASIS, different OFFSET
+	if (packet[9] == 0x40) {
+		uint32_t meter_id = ((uint32_t)packet[5] << 16) | ((uint32_t)packet[6] << 8) | packet[7];
+		uint32_t cons = packet[10] | (packet[11] << 8) | ((uint32_t)packet[12] << 16);
+		uint64_t result = X40_OFFSET;
+		for (int i = 0; i < 24; i++) {
+			if (meter_id & (1 << i))
+				result ^= ID_BASIS[i];
+		}
+		for (int i = 0; i < 24; i++) {
+			if (cons & (1 << i))
+				result ^= CONS_BASIS[i];
+		}
+		uint64_t actual = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
+		                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
+		                  (uint64_t)packet[19];
+		if (result == actual)
+			return PKT_VALID;
+		else
+			return PKT_INVALID;
+	}
+
+	// Other non-standard (3D0C, etc): two-packet validation
 	uint64_t constant = deriveConstant();
 	if (!hasStoredConstant) {
 		storedConstant = constant;
 		hasStoredConstant = true;
-		return PKT_NON_STANDARD;  // first packet, can't validate yet
+		return PKT_NON_STANDARD;
 	}
 	if (constant == storedConstant)
 		return PKT_VALID_TWO_PKT;
