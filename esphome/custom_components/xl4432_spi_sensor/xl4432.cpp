@@ -112,7 +112,9 @@ float Xl4432::extractMeterReading()
 	if (useIdAsSync) {
 		return float((packet[3] << 16) + (packet[2] << 8) + packet[1]) / 10;
 	} else {
-		return float((packet[12] << 16) + (packet[11] << 8) + packet[10]) / 10;
+		float raw = float((packet[12] << 16) + (packet[11] << 8) + packet[10]);
+		// Sonata/x40 meters report in liters, standard in 0.1 m³
+		return (packet[9] == 0x40) ? raw / 1000 : raw / 10;
 	}
 }
 
