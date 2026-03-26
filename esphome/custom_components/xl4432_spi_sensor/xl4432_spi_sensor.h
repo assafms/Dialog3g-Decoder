@@ -27,9 +27,11 @@ class Xl4432SPISensor : public sensor::Sensor,
   void dump_config() override;
   void set_meter_id(const std::string &meter_id);
   void set_packet_sniff(bool packet_sniff);
+  void set_tcp_server(bool enabled);
   void send_to_clients(const char *line);
 
  private:
+  bool tcp_enabled_{false};
 #ifdef USE_ARDUINO
   WiFiServer tcp_server_{SNIFF_TCP_PORT};
   WiFiClient tcp_clients_[3];

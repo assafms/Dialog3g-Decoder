@@ -50,6 +50,10 @@ void Xl4432SPISensor::set_packet_sniff(bool packet_sniff) {
   xl4432.packetSniff = packet_sniff;
 }
 
+void Xl4432SPISensor::set_tcp_server(bool enabled) {
+  tcp_enabled_ = enabled;
+}
+
 IRAM_ATTR void nIRQ_ISR(){
   xl4432.spiDisableReciver();
   xl4432.checkForNewPacket();
@@ -64,24 +68,16 @@ void Xl4432SPISensor::setup() {
     xl4432.initXl4432Registers();
     xl4432.lastMeterMeasurment = 0;
 #ifdef USE_ARDUINO
-    tcp_server_.begin();
-    ESP_LOGI(TAG, "TCP sniff server on port %d", SNIFF_TCP_PORT);
+    if (tcp_enabled_) {
+        tcp_server_.begin();
+        ESP_LOGI(TAG, "TCP sniff server on port %d", SNIFF_TCP_PORT);
+    }
 #endif
 }
 
 void Xl4432SPISensor::send_to_clients(const char *line) {
 #ifdef USE_ARDUINO
-    // Accept new connections
-    WiFiClient newClient = tcp_server_.available();
-    if (newClient) {
-        for (int i = 0; i < 3; i++) {
-            if (!tcp_clients_[i] || !tcp_clients_[i].connected()) {
-                tcp_clients_[i] = newClient;
-                ESP_LOGI(TAG, "TCP client %d connected", i);
-                break;
-            }
-        }
-    }
+    if (!tcp_enabled_) return;
     // Send to all connected clients
     for (int i = 0; i < 3; i++) {
         if (tcp_clients_[i] && tcp_clients_[i].connected()) {
@@ -98,8 +94,7 @@ void Xl4432SPISensor::update() {
 void Xl4432SPISensor::loop() {
 
 #ifdef USE_ARDUINO
-// Accept pending TCP connections even when no packets
-{
+if (tcp_enabled_) {
     WiFiClient newClient = tcp_server_.available();
     if (newClient) {
         for (int i = 0; i < 3; i++) {
