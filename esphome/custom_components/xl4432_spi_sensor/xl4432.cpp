@@ -14,6 +14,7 @@ static const uint64_t CONS_BASIS[24] = {
 };
 
 static const uint64_t X40_OFFSET = 0xAAF90B5990ULL;
+static const uint64_t D3C_OFFSET = 0x6D2A310958ULL;
 
 static const uint64_t ID_BASIS[24] = {
     0x456FF2CC60ULL, 0x8ADE6AAE08ULL, 0x0149F2DC28ULL, 0x7FAE4CBD30ULL,
@@ -119,7 +120,29 @@ PacketStatus Xl4432::validatePacket()
 			return PKT_INVALID;
 	}
 
-	// Other non-standard (3D0C, etc): two-packet validation
+	// 3D0C meters: same ID_BASIS, different OFFSET
+	if (packet[8] == 0x3D && packet[9] == 0x0C) {
+		uint32_t meter_id = ((uint32_t)packet[5] << 16) | ((uint32_t)packet[6] << 8) | packet[7];
+		uint32_t cons = packet[10] | (packet[11] << 8) | ((uint32_t)packet[12] << 16);
+		uint64_t result = D3C_OFFSET;
+		for (int i = 0; i < 24; i++) {
+			if (meter_id & (1 << i))
+				result ^= ID_BASIS[i];
+		}
+		for (int i = 0; i < 24; i++) {
+			if (cons & (1 << i))
+				result ^= CONS_BASIS[i];
+		}
+		uint64_t actual = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
+		                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
+		                  (uint64_t)packet[19];
+		if (result == actual)
+			return PKT_VALID;
+		else
+			return PKT_INVALID;
+	}
+
+	// Other unknown groups: two-packet validation fallback
 	uint64_t constant = deriveConstant();
 	if (!hasStoredConstant) {
 		storedConstant = constant;
