@@ -106,7 +106,7 @@ Enable phone hotspot, configure ESPHome WiFi with the hotspot credentials, and t
 | 2-4 | Type | Meter type / firmware variant |
 | 5-7 | Meter ID | 3 bytes, big-endian |
 | 8-9 | Group | `0x00 0x00` standard, `0x00 0x40` x40, `0x3D 0x0C` 3D0C |
-| 10-12 | Consumption | 3 bytes, little-endian. Divide by 10 for m³ |
+| 10-12 | Consumption | 3 bytes, little-endian. STD/3D0C: ÷10 for m³. Sonata/x40: ÷1000 for m³ |
 | 13-14 | Status | Usually `0x00 0x05` |
 | 15-19 | Scramble | GF(2) integrity field |
 | 20 | Trailer | High nibble only (low nibble unreliable due to Manchester timing drift) |
@@ -120,28 +120,29 @@ scrambled = OFFSET ^ M_id(meter_id) ^ M_cons(consumption)
 ```
 
 Where:
-- **OFFSET** is a global 40-bit constant (`0xDF750DC2C0`)
-- **M_id** is a 40x24 binary matrix applied to the 24-bit meter ID (proven for standard meters)
-- **M_cons** is a 40x17 binary matrix applied to bits 0-16 of consumption (shared across all groups)
+- **OFFSET** depends on meter group: STD=`0xDF750DC2C0`, x40=`0xAAF90B5990`, 3D0C=`0x6D2A310958`
+- **M_id** is a 40x24 binary matrix applied to the 24-bit meter ID (shared across all groups)
+- **M_cons** is a 40x24 binary matrix applied to the 24-bit consumption value (shared across all groups)
 - **^** is bitwise XOR
 
-### Consumption Basis Vectors (bits 0-16, all groups)
+### Consumption Basis Vectors (bits 0-23, all groups)
 
 | Bit | Vector | Bit | Vector |
 |-----|--------|-----|--------|
-| 0 | `0x61B89FB6A0` | 9 | `0x408B817A30` |
-| 1 | `0xE360308318` | 10 | `0xA1060D1A38` |
-| 2 | `0xC6C12115C8` | 11 | `0x420D5A2788` |
-| 3 | `0xAD9382E0F8` | 12 | `0x841AB44F10` |
-| 4 | `0x7B374A3C50` | 13 | `0x0835A7BB10` |
-| 5 | `0xF66E9478A0` | 14 | `0x106AC040E8` |
-| 6 | `0xECDDE7D470` | 15 | `0x20D40FB718` |
-| 7 | `0xF9AB805540` | 16 | `0x51AAF3D980` |
-| 8 | `0xA045A72F80` | | |
+| 0 | `0x61B89FB6A0` | 12 | `0x841AB44F10` |
+| 1 | `0xE360308318` | 13 | `0x0835A7BB10` |
+| 2 | `0xC6C12115C8` | 14 | `0x106AC040E8` |
+| 3 | `0xAD9382E0F8` | 15 | `0x20D40FB718` |
+| 4 | `0x7B374A3C50` | 16 | `0x51AAF3D980` |
+| 5 | `0xF66E9478A0` | 17 | `0x2826118BE0` |
+| 6 | `0xECDDE7D470` | 18 | `0xADEBE64938` |
+| 7 | `0xF9AB805540` | 19 | `0x2D02BFE790` |
+| 8 | `0xA045A72F80` | 20 | `0x5A04F0F9E8` |
+| 9 | `0x408B817A30` | 21 | `0xB4086EC518` |
+| 10 | `0xA1060D1A38` | 22 | `0xC0E088FEF8` |
+| 11 | `0x420D5A2788` | 23 | `0xD022B40558` |
 
-Bits 0-14 proven via transition analysis. Bits 15-16 confirmed by multiple meters. Bits 17-23 unsolved for standard meters (no meters with consumption > 13107 m³ observed). All groups share these vectors.
-
-### Meter ID Basis Vectors (bits 0-23, standard meters only)
+### Meter ID Basis Vectors (bits 0-23, all groups)
 
 | Bit | Vector | Bit | Vector |
 |-----|--------|-----|--------|
@@ -158,22 +159,21 @@ Bits 0-14 proven via transition analysis. Bits 15-16 confirmed by multiple meter
 | 10 | `0x475155C2F0` | 22 | `0x40DD972C00` |
 | 11 | `0x8EA2AB85E0` | 23 | `0xA1AA21B658` |
 
-Bits 0,1,4 proven by physical serial numbers. Bits 3,5,6 proven by physical meter readings (93D9E9, 082CD3, 5E2EE8). Bit 2 supported by RANSAC 71/71 — 100% for standard meters (no physical verification yet). Bit 7 confirmed zero. Bits 8-23 stable across all solves. Non-standard meters use different ID matrices (unsolved).
+All 24 vectors shared across all meter groups. Bit 7 confirmed zero. Bits 0,1,4 proven by physical serial numbers. Bits 3,5,6 proven by physical meter readings. Bit 2 supported by RANSAC 71/71.
 
-### Validation Methods
+### Validation
 
-**Standard meters (single-packet):** Compute expected scramble from meter ID and consumption, compare to received bytes 15-19. Any mismatch = RF bit error. Works from the first packet.
-
-**Non-standard meters (two-packet):** Derive constant = scrambled ^ M_cons(consumption). Store from first packet. If second packet gives same constant, both are valid. No ID matrix needed.
+All groups use single-packet validation: compute expected scramble from OFFSET + meter ID + consumption, compare to received bytes 15-19. Any mismatch = RF bit error. Select OFFSET based on bytes 8-9.
 
 ### Methodology
 
-The algorithm was reverse-engineered through a strictly non-circular process:
 1. Consumption basis vectors from same-meter transition analysis (ID-independent)
 2. Per-meter constants via two-packet method (ID-independent)
-3. ID basis matrix via RANSAC over 71 standard two-packet-confirmed meters (71/71, 100%)
-4. Physical verification against 4 meters with known serial numbers
-5. Field validation: 294 standard meters pass full validation (70% raw packet rate)
+3. ID basis matrix via RANSAC over 71 two-packet-confirmed meters (71/71, 100%)
+4. Physical verification against 3 standard meters + 1 Sonata meter
+5. Group offsets discovered by testing if non-standard meters share the ID_BASIS (they do)
+6. CONS_BASIS bits 17-23 derived from x40 high-consumption data using proven x40 OFFSET
+7. Field validation: 334 meters pass across all groups
 
 ## Links
 
