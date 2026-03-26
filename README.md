@@ -142,7 +142,7 @@ Bits 0-14 proven via transition analysis. Bits 15-16 confirmed by multiple meter
 | 10 | `0x475155C2F0` | 22 | `0x40DD972C00` |
 | 11 | `0x8EA2AB85E0` | 23 | `0xA1AA21B658` |
 
-Bits 0,1,4 proven by physical serial numbers. Bits 3,5,6 proven by physical meter readings (93D9E9, 082CD3, 5E2EE8). Bit 2 supported by RANSAC 71/72 (no physical verification yet). Bit 7 confirmed zero. Bits 8-23 stable across all solves. Non-standard meters use different ID matrices (unsolved).
+Bits 0,1,4 proven by physical serial numbers. Bits 3,5,6 proven by physical meter readings (93D9E9, 082CD3, 5E2EE8). Bit 2 supported by RANSAC 71/71 — 100% for standard meters (no physical verification yet). Bit 7 confirmed zero. Bits 8-23 stable across all solves. Non-standard meters use different ID matrices (unsolved).
 
 ### Validation Methods
 
@@ -155,7 +155,7 @@ Bits 0,1,4 proven by physical serial numbers. Bits 3,5,6 proven by physical mete
 The algorithm was reverse-engineered through a strictly non-circular process:
 1. Consumption basis vectors from same-meter transition analysis (ID-independent)
 2. Per-meter constants via two-packet method (ID-independent)
-3. ID basis matrix via RANSAC over 72 two-packet-confirmed meters (71/72, 98.6%)
+3. ID basis matrix via RANSAC over 71 standard two-packet-confirmed meters (71/71, 100%)
 4. Physical verification against 4 meters with known serial numbers
 5. Field validation: 294 standard meters pass full validation (70% raw packet rate)
 
