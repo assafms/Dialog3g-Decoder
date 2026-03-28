@@ -2,13 +2,12 @@
 #include "xl4432_spi_sensor.h"
 #include "xl4432.h"
 
-// LFSR seed and submask table — generates all basis vectors for bytes 5-11
-static const uint64_t LFSR_SEED = 0xA045A72F80ULL;
-
-static const uint64_t LFSR_SUBMASK[8] = {
-    0x0000000000ULL, 0x00018F36C8ULL, 0x201080D890ULL, 0x20110FEE58ULL,
-    0x00014013F8ULL, 0x0000CF2530ULL, 0x2011C0CB68ULL, 0x20104FFDA0ULL,
-};
+// 40-bit LFSR with 3 feedback taps — generates all basis vectors for bytes 5-11
+// Seed generates 56 vectors in sequence: byte11, byte10, byte9, byte8, byte7, byte6, byte5
+static const uint64_t LFSR_SEED  = 0xA045A72F80ULL;
+static const uint64_t LFSR_TAP_A = 0x00014013F8ULL;  // feedback when bit 39 = 1
+static const uint64_t LFSR_TAP_B = 0x201080D890ULL;  // feedback when bit 31 = 1
+static const uint64_t LFSR_TAP_C = 0x00018F36C8ULL;  // feedback when bit 23 = 1
 
 // STD group correction: XOR this into byte-7 vectors at bit positions 2,3,5,6,7
 static const uint64_t BYTE7_CORRECTION = 0x34E4E74B50ULL;
@@ -43,8 +42,11 @@ Xl4432::Xl4432(char id[3], bool use_id_as_sync)
 
 static uint64_t lfsr_next(uint64_t v)
 {
-	int key = ((v >> 39) & 1) * 4 + ((v >> 31) & 1) * 2 + ((v >> 23) & 1);
-	return ((v << 1) & 0xFFFFFFFFFFULL) ^ LFSR_SUBMASK[key];
+	uint64_t fb = 0;
+	if (v & (1ULL << 39)) fb ^= LFSR_TAP_A;
+	if (v & (1ULL << 31)) fb ^= LFSR_TAP_B;
+	if (v & (1ULL << 23)) fb ^= LFSR_TAP_C;
+	return ((v << 1) & 0xFFFFFFFFFFULL) ^ fb;
 }
 
 uint64_t Xl4432::expectedScramble()
@@ -182,17 +184,92 @@ PacketStatus Xl4432::validatePacket()
 	if (packet[4] & 0x80)
 		return PKT_NON_STANDARD;
 
-	// Universal validation: works for STD, and any group whose byte-7
-	// correction mask is known. Currently only STD (0x0000) is fully solved.
+	// Universal validation with up to 3-bit error correction.
+	// Currently only STD (0x0000) is fully solved.
 	if (packet[8] == 0x00 && packet[9] == 0x00) {
 		uint64_t expected = expectedScramble();
 		uint64_t actual = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
 		                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
 		                  (uint64_t)packet[19];
-		if (expected == actual)
+		uint64_t syndrome = expected ^ actual;
+
+		if (syndrome == 0)
 			return PKT_VALID;
-		else
-			return PKT_INVALID;
+
+		// Build syndrome table: 65 input bits + 40 scramble bits = 105
+		static const int SYN_COUNT = 105;
+		uint64_t syn[SYN_COUNT];
+		uint64_t v = LFSR_SEED;
+		// Bytes 11,10,9,8
+		for (int i = 0; i < 32; i++) { syn[i] = v; v = lfsr_next(v); }
+		// Byte 7 with correction
+		for (int i = 0; i < 8; i++) {
+			syn[32+i] = (STD_CORRECTION_MASK & (1<<i)) ? (v ^ BYTE7_CORRECTION) : v;
+			v = lfsr_next(v);
+		}
+		// Bytes 6, 5
+		for (int i = 0; i < 16; i++) { syn[40+i] = v; v = lfsr_next(v); }
+		// Byte 12
+		for (int i = 0; i < 8; i++) syn[56+i] = CONS_HI[i];
+		// Alarm flag
+		syn[64] = ALARM_VEC;
+		// Scramble bits
+		for (int i = 0; i < 40; i++) syn[65+i] = 1ULL << i;
+
+		// Bit index -> packet byte/bit
+		static const uint8_t idx_byte[] = {
+			11,11,11,11,11,11,11,11, 10,10,10,10,10,10,10,10,
+			 9, 9, 9, 9, 9, 9, 9, 9,  8, 8, 8, 8, 8, 8, 8, 8,
+			 7, 7, 7, 7, 7, 7, 7, 7,  6, 6, 6, 6, 6, 6, 6, 6,
+			 5, 5, 5, 5, 5, 5, 5, 5, 12,12,12,12,12,12,12,12,
+			 4
+		};
+
+		auto flip = [&](int idx) {
+			if (idx < 65) {
+				uint8_t bp = idx_byte[idx];
+				uint8_t bi = (idx == 64) ? 5 : (idx % 8);
+				packet[bp] ^= (1 << bi);
+			} else {
+				int sb = idx - 65;
+				packet[19 - sb/8] ^= (1 << (sb % 8));
+			}
+		};
+
+		// 1-bit correction
+		for (int i = 0; i < SYN_COUNT; i++) {
+			if (syn[i] == syndrome) {
+				flip(i);
+				return PKT_CORRECTED_1;
+			}
+		}
+
+		// 2-bit correction
+		for (int i = 0; i < SYN_COUNT; i++) {
+			uint64_t r1 = syndrome ^ syn[i];
+			for (int j = i+1; j < SYN_COUNT; j++) {
+				if (syn[j] == r1) {
+					flip(i); flip(j);
+					return PKT_CORRECTED_2;
+				}
+			}
+		}
+
+		// 3-bit correction (~193K iterations, ~4ms on ESP32)
+		for (int i = 0; i < SYN_COUNT; i++) {
+			uint64_t r1 = syndrome ^ syn[i];
+			for (int j = i+1; j < SYN_COUNT; j++) {
+				uint64_t r2 = r1 ^ syn[j];
+				for (int k = j+1; k < SYN_COUNT; k++) {
+					if (syn[k] == r2) {
+						flip(i); flip(j); flip(k);
+						return PKT_CORRECTED_3;
+					}
+				}
+			}
+		}
+
+		return PKT_INVALID;
 	}
 
 	// Non-STD groups: two-packet validation fallback

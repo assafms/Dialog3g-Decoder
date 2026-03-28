@@ -134,6 +134,16 @@ switch (status) {
                  xl4432.meterMeasurment, xl4432.output);
         break;
 
+    case PKT_CORRECTED_1:
+    case PKT_CORRECTED_2:
+    case PKT_CORRECTED_3:
+        xl4432.meterMeasurment = xl4432.extractMeterReading();
+        publish_state(xl4432.meterMeasurment);
+        ESP_LOGI("gf2", "Corrected (%dbit): reading=%.1f pkt=%s",
+                 status - PKT_CORRECTED_1 + 1,
+                 xl4432.meterMeasurment, xl4432.output);
+        break;
+
     case PKT_INVALID:
         ESP_LOGW("gf2", "RF error: reading=%.1f pkt=%s",
                  xl4432.meterMeasurment, xl4432.output);
