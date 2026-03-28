@@ -1,19 +1,19 @@
 /*
- * Arad Dialog 3G / Sonata — packet validation
+ * Arad Dialog 3G / Sonata — packet validation with up to 3-bit error correction
  *
  * The 5 scrambled bytes (15-19) are a GF(2) linear function of packet
- * bytes 5-12 plus a flag bit.  All 56 basis vectors for bytes 5-11
- * are consecutive states of a 40-bit LFSR with 3 feedback taps;
- * byte 12 uses a separate lookup table.
+ * bytes 5-12 plus a flag bit.  All 64 basis vectors for bytes 5-12
+ * are consecutive states of a 40-bit LFSR with 3 feedback taps.
  *
  * LFSR: next = (v << 1) ^ (TAP_A if bit39) ^ (TAP_B if bit31) ^ (TAP_C if bit23)
+ * Seed: 0x51AAF3D980 (byte 12 bit 0)
+ * Sequence: byte12, byte11, byte10, byte9, byte8, byte7, byte6, byte5
  *
  * scrambled = OFFSET
- *           ^ M(byte11) ^ M(byte10)           -- consumption low/mid
- *           ^ M(byte9)  ^ M(byte8)            -- meter group
- *           ^ M(byte7)  ^ M(byte6) ^ M(byte5) -- meter ID
- *           ^ CONS_HI(byte12)                 -- consumption high
- *           ^ (ALARM_VEC if byte4 bit5 set)   -- general alarm flag
+ *           ^ M(byte12) ^ M(byte11) ^ M(byte10) -- consumption
+ *           ^ M(byte9)  ^ M(byte8)              -- meter group
+ *           ^ M(byte7)  ^ M(byte6) ^ M(byte5)   -- meter ID
+ *           ^ (ALARM_VEC if byte4 bit5 set)      -- general alarm flag
  *
  * Byte 7 (ID LSB) vectors receive a per-group XOR correction.
  * Currently only the standard group (0x00 0x00) correction is known.
@@ -49,10 +49,7 @@ static uint64_t lfsr_step(uint64_t v)
 
 /* ---- Constants ---- */
 
-/* Byte 12 is part of the LFSR — it precedes byte 11 in the sequence.
- * Full LFSR order: byte12, byte11, byte10, byte9, byte8, byte7, byte6, byte5
- * Seed 0x51AAF3D980 is byte12 bit 0, the start of the full 64-vector sequence.
- */
+/* No lookup tables — all 64 basis vectors generated from LFSR seed */
 
 /* Global offset (for group 0x0000 with STD byte-7 correction applied) */
 static const uint64_t OFFSET = 0xDF750DC2C0ULL;
