@@ -2,28 +2,29 @@
 #include "xl4432_spi_sensor.h"
 #include "xl4432.h"
 
-static const uint64_t OFFSET = 0xDF750DC2C0ULL;
+// LFSR seed and submask table — generates all basis vectors for bytes 5-11
+static const uint64_t LFSR_SEED = 0xA045A72F80ULL;
 
-static const uint64_t CONS_BASIS[24] = {
-    0x61B89FB6A0ULL, 0xE360308318ULL, 0xC6C12115C8ULL, 0xAD9382E0F8ULL,
-    0x7B374A3C50ULL, 0xF66E9478A0ULL, 0xECDDE7D470ULL, 0xF9AB805540ULL,
-    0xA045A72F80ULL, 0x408B817A30ULL, 0xA1060D1A38ULL, 0x420D5A2788ULL,
-    0x841AB44F10ULL, 0x0835A7BB10ULL, 0x106AC040E8ULL, 0x20D40FB718ULL,
+static const uint64_t LFSR_SUBMASK[8] = {
+    0x0000000000ULL, 0x00018F36C8ULL, 0x201080D890ULL, 0x20110FEE58ULL,
+    0x00014013F8ULL, 0x0000CF2530ULL, 0x2011C0CB68ULL, 0x20104FFDA0ULL,
+};
+
+// STD group correction: XOR this into byte-7 vectors at bit positions 2,3,5,6,7
+static const uint64_t BYTE7_CORRECTION = 0x34E4E74B50ULL;
+static const uint8_t  STD_CORRECTION_MASK = 0xEC;  // bits 2,3,5,6,7
+
+// General alarm flag (byte 4 bit 5) scramble contribution
+static const uint64_t ALARM_VEC = 0xA8F1156730ULL;
+
+// CONS_BASIS[16-23] — byte 12, not part of LFSR, stored separately
+static const uint64_t CONS_HI[8] = {
     0x51AAF3D980ULL, 0x2826118BE0ULL, 0xADEBE64938ULL, 0x2D02BFE790ULL,
     0x5A04F0F9E8ULL, 0xB4086EC518ULL, 0xC0E088FEF8ULL, 0xD022B40558ULL,
 };
 
-static const uint64_t X40_OFFSET = 0xAAF90B5990ULL;
-static const uint64_t D3C_OFFSET = 0x6D2A310958ULL;
-
-static const uint64_t ID_BASIS[24] = {
-    0x456FF2CC60ULL, 0x8ADE6AAE08ULL, 0x0149F2DC28ULL, 0x7FAE4CBD30ULL,
-    0x9694D8DA08ULL, 0x39DD1902E0ULL, 0x2E9694EEF8ULL, 0x0000000000ULL,
-    0x49D8C178F8ULL, 0xB3A08D1FA8ULL, 0x475155C2F0ULL, 0x8EA2AB85E0ULL,
-    0x3D5518F660ULL, 0x7AAA31ECC0ULL, 0xD544E30110ULL, 0xAA89092710ULL,
-    0x7503D28548ULL, 0xEA062A3C58ULL, 0xD40D146B48ULL, 0xA81B68C568ULL,
-    0x5037919928ULL, 0xA06EAC0498ULL, 0x40DD972C00ULL, 0xA1AA21B658ULL,
-};
+// Global offset (for group 0x0000 with STD byte-7 correction applied)
+static const uint64_t OFFSET = 0xDF750DC2C0ULL;
 
 Xl4432::Xl4432(char id[3], bool use_id_as_sync)
 {
@@ -40,19 +41,93 @@ Xl4432::Xl4432(char id[3], bool use_id_as_sync)
 	packetSniff = false;
 }
 
+static uint64_t lfsr_next(uint64_t v)
+{
+	int key = ((v >> 39) & 1) * 4 + ((v >> 31) & 1) * 2 + ((v >> 23) & 1);
+	return ((v << 1) & 0xFFFFFFFFFFULL) ^ LFSR_SUBMASK[key];
+}
+
 uint64_t Xl4432::expectedScramble()
 {
-	uint32_t meter_id = ((uint32_t)packet[5] << 16) | ((uint32_t)packet[6] << 8) | packet[7];
-	uint32_t cons = packet[10] | (packet[11] << 8) | ((uint32_t)packet[12] << 16);
 	uint64_t result = OFFSET;
-	for (int i = 0; i < 24; i++) {
-		if (meter_id & (1 << i))
-			result ^= ID_BASIS[i];
+
+	// Apply byte-7 correction for non-STD groups:
+	// STD (0x0000) correction is baked into OFFSET and LFSR vectors.
+	// Other groups need their STD correction removed and group-specific applied.
+	// For now: STD uses stored correction, others use raw LFSR (no correction).
+	uint8_t corr_mask = STD_CORRECTION_MASK;
+	if (packet[8] != 0x00 || packet[9] != 0x00) {
+		// Non-STD group: remove STD correction from offset
+		// and apply group bytes contribution via LFSR vectors
+		corr_mask = 0x00;  // use raw LFSR byte-7 vectors
 	}
-	for (int i = 0; i < 24; i++) {
-		if (cons & (1 << i))
-			result ^= CONS_BASIS[i];
+
+	// Generate basis vectors via LFSR and apply to input bytes
+	// Sequence: byte11, byte10, byte9, byte8, byte7, byte6, byte5
+	uint64_t v = LFSR_SEED;
+
+	// Byte 11 (consumption bits 8-15)
+	for (int i = 0; i < 8; i++) {
+		if (packet[11] & (1 << i))
+			result ^= v;
+		v = lfsr_next(v);
 	}
+
+	// Byte 10 (consumption bits 0-7)
+	for (int i = 0; i < 8; i++) {
+		if (packet[10] & (1 << i))
+			result ^= v;
+		v = lfsr_next(v);
+	}
+
+	// Byte 9 (group low)
+	for (int i = 0; i < 8; i++) {
+		if (packet[9] & (1 << i))
+			result ^= v;
+		v = lfsr_next(v);
+	}
+
+	// Byte 8 (group high)
+	for (int i = 0; i < 8; i++) {
+		if (packet[8] & (1 << i))
+			result ^= v;
+		v = lfsr_next(v);
+	}
+
+	// Byte 7 (ID LSB — group-specific correction)
+	for (int i = 0; i < 8; i++) {
+		uint64_t basis = v;
+		if (corr_mask & (1 << i))
+			basis ^= BYTE7_CORRECTION;
+		if (packet[7] & (1 << i))
+			result ^= basis;
+		v = lfsr_next(v);
+	}
+
+	// Byte 6 (ID mid)
+	for (int i = 0; i < 8; i++) {
+		if (packet[6] & (1 << i))
+			result ^= v;
+		v = lfsr_next(v);
+	}
+
+	// Byte 5 (ID MSB)
+	for (int i = 0; i < 8; i++) {
+		if (packet[5] & (1 << i))
+			result ^= v;
+		v = lfsr_next(v);
+	}
+
+	// Byte 12 (consumption bits 16-23 — separate, not LFSR)
+	for (int i = 0; i < 8; i++) {
+		if (packet[12] & (1 << i))
+			result ^= CONS_HI[i];
+	}
+
+	// Byte 4 bit 5: general alarm flag
+	if (packet[4] & 0x20)
+		result ^= ALARM_VEC;
+
 	return result;
 }
 
@@ -63,10 +138,27 @@ uint64_t Xl4432::deriveConstant()
 	                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
 	                  (uint64_t)packet[19];
 	uint64_t result = actual;
-	for (int i = 0; i < 24; i++) {
-		if (cons & (1 << i))
-			result ^= CONS_BASIS[i];
+
+	// Strip consumption contribution using LFSR
+	uint64_t v = LFSR_SEED;
+	// Byte 11
+	for (int i = 0; i < 8; i++) {
+		if (packet[11] & (1 << i))
+			result ^= v;
+		v = lfsr_next(v);
 	}
+	// Byte 10
+	for (int i = 0; i < 8; i++) {
+		if (packet[10] & (1 << i))
+			result ^= v;
+		v = lfsr_next(v);
+	}
+	// Byte 12 (separate)
+	for (int i = 0; i < 8; i++) {
+		if (packet[12] & (1 << i))
+			result ^= CONS_HI[i];
+	}
+
 	return result;
 }
 
@@ -86,7 +178,12 @@ PacketStatus Xl4432::validatePacket()
 	if (!idMatch)
 		return PKT_ID_MISMATCH;
 
-	// Standard meters: full GF(2) validation
+	// Skip reboot packets (byte 4 bit 7) — consumption field is invalid
+	if (packet[4] & 0x80)
+		return PKT_NON_STANDARD;
+
+	// Universal validation: works for STD, and any group whose byte-7
+	// correction mask is known. Currently only STD (0x0000) is fully solved.
 	if (packet[8] == 0x00 && packet[9] == 0x00) {
 		uint64_t expected = expectedScramble();
 		uint64_t actual = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
@@ -98,51 +195,8 @@ PacketStatus Xl4432::validatePacket()
 			return PKT_INVALID;
 	}
 
-	// x40/Sonata meters: same ID_BASIS, different OFFSET
-	if (packet[9] == 0x40) {
-		uint32_t meter_id = ((uint32_t)packet[5] << 16) | ((uint32_t)packet[6] << 8) | packet[7];
-		uint32_t cons = packet[10] | (packet[11] << 8) | ((uint32_t)packet[12] << 16);
-		uint64_t result = X40_OFFSET;
-		for (int i = 0; i < 24; i++) {
-			if (meter_id & (1 << i))
-				result ^= ID_BASIS[i];
-		}
-		for (int i = 0; i < 24; i++) {
-			if (cons & (1 << i))
-				result ^= CONS_BASIS[i];
-		}
-		uint64_t actual = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
-		                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
-		                  (uint64_t)packet[19];
-		if (result == actual)
-			return PKT_VALID;
-		else
-			return PKT_INVALID;
-	}
-
-	// 3D0C meters: same ID_BASIS, different OFFSET
-	if (packet[8] == 0x3D && packet[9] == 0x0C) {
-		uint32_t meter_id = ((uint32_t)packet[5] << 16) | ((uint32_t)packet[6] << 8) | packet[7];
-		uint32_t cons = packet[10] | (packet[11] << 8) | ((uint32_t)packet[12] << 16);
-		uint64_t result = D3C_OFFSET;
-		for (int i = 0; i < 24; i++) {
-			if (meter_id & (1 << i))
-				result ^= ID_BASIS[i];
-		}
-		for (int i = 0; i < 24; i++) {
-			if (cons & (1 << i))
-				result ^= CONS_BASIS[i];
-		}
-		uint64_t actual = ((uint64_t)packet[15] << 32) | ((uint64_t)packet[16] << 24) |
-		                  ((uint64_t)packet[17] << 16) | ((uint64_t)packet[18] << 8) |
-		                  (uint64_t)packet[19];
-		if (result == actual)
-			return PKT_VALID;
-		else
-			return PKT_INVALID;
-	}
-
-	// Other unknown groups: two-packet validation fallback
+	// Non-STD groups: two-packet validation fallback
+	// (x40 byte-7 correction not yet fully solved)
 	uint64_t constant = deriveConstant();
 	if (!hasStoredConstant) {
 		storedConstant = constant;
