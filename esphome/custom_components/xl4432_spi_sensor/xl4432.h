@@ -40,8 +40,9 @@ class Xl4432 {
 	uint64_t storedConstant;
 	bool     hasStoredConstant;
 
-  private:
 	float extractMeterReading();
+
+  private:
 	void  readPacketFromFifo();
 	void  spiInitRadio();
 	void  spiXl4432Fifo();
