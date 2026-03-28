@@ -126,9 +126,11 @@ if (PACKET_SNIFF) {
 }
 
 PacketStatus status = xl4432.validatePacket();
+stat_total_++;
 
 switch (status) {
     case PKT_VALID:
+        stat_valid_++;
         publish_state(xl4432.meterMeasurment);
         ESP_LOGI("gf2", "Valid: reading=%.1f pkt=%s",
                  xl4432.meterMeasurment, xl4432.output);
@@ -136,15 +138,18 @@ switch (status) {
 
     case PKT_CORRECTED_1:
     case PKT_CORRECTED_2:
-    case PKT_CORRECTED_3:
+    case PKT_CORRECTED_3: {
+        int nbits = status - PKT_CORRECTED_1 + 1;
+        stat_corrected_[nbits - 1]++;
         xl4432.meterMeasurment = xl4432.extractMeterReading();
         publish_state(xl4432.meterMeasurment);
         ESP_LOGI("gf2", "Corrected (%dbit): reading=%.1f pkt=%s",
-                 status - PKT_CORRECTED_1 + 1,
-                 xl4432.meterMeasurment, xl4432.output);
+                 nbits, xl4432.meterMeasurment, xl4432.output);
         break;
+    }
 
     case PKT_INVALID:
+        stat_invalid_++;
         ESP_LOGW("gf2", "RF error: reading=%.1f pkt=%s",
                  xl4432.meterMeasurment, xl4432.output);
         break;
@@ -154,6 +159,7 @@ switch (status) {
         break;
 
     case PKT_VALID_TWO_PKT:
+        stat_valid_++;
         publish_state(xl4432.meterMeasurment);
         ESP_LOGI("gf2", "Valid (2pkt): reading=%.1f pkt=%s",
                  xl4432.meterMeasurment, xl4432.output);
@@ -166,6 +172,16 @@ switch (status) {
 
     default:
         break;
+}
+
+// Log stats every 10 packets
+if (stat_total_ > 0 && stat_total_ % 10 == 0) {
+    uint32_t corrected = stat_corrected_[0] + stat_corrected_[1] + stat_corrected_[2];
+    ESP_LOGI("stats", "Pkts=%lu Valid=%lu Fix1=%lu Fix2=%lu Fix3=%lu Bad=%lu (%.0f%% ok)",
+             stat_total_, stat_valid_,
+             stat_corrected_[0], stat_corrected_[1], stat_corrected_[2],
+             stat_invalid_,
+             100.0 * (stat_valid_ + corrected) / stat_total_);
 }
 
 }

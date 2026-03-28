@@ -30,6 +30,12 @@ class Xl4432SPISensor : public sensor::Sensor,
   void set_tcp_server(bool enabled);
   void send_to_clients(const char *line);
 
+  // Packet statistics
+  uint32_t stat_total_{0};
+  uint32_t stat_valid_{0};
+  uint32_t stat_corrected_[3]{0, 0, 0};  // 1-bit, 2-bit, 3-bit
+  uint32_t stat_invalid_{0};
+
  private:
   bool tcp_enabled_{false};
 #ifdef USE_ARDUINO
