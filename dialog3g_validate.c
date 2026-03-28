@@ -1,42 +1,31 @@
 /*
  * Arad Dialog 3G / Sonata — packet validation with up to 3-bit error correction
  *
- * The 5 scrambled bytes (15-19) are a GF(2) linear function of packet
- * bytes 5-12 plus a flag bit.  All 64 basis vectors for bytes 5-12
- * are consecutive states of a 40-bit LFSR with 3 feedback taps.
- *
+ * All basis vectors are consecutive states of a 40-bit LFSR with 3 feedback taps.
  * LFSR: next = (v << 1) ^ (TAP_A if bit39) ^ (TAP_B if bit31) ^ (TAP_C if bit23)
  * Seed: 0x51AAF3D980 (byte 12 bit 0)
- * Sequence: byte12, byte11, byte10, byte9, byte8, byte7, byte6, byte5
+ * Sequence: byte12, byte11, byte10, byte9, byte8, byte7, byte6, byte5, byte4, ...
  *
- * scrambled = OFFSET
- *           ^ M(byte12) ^ M(byte11) ^ M(byte10) -- consumption
- *           ^ M(byte9)  ^ M(byte8)              -- meter group
- *           ^ M(byte7)  ^ M(byte6) ^ M(byte5)   -- meter ID
- *           ^ (ALARM_VEC if byte4 bit5 set)      -- general alarm flag
- *
- * Byte 7 (ID LSB) vectors receive a per-group XOR correction.
- * Currently only the standard group (0x00 0x00) correction is known.
+ * Per-group differences:
+ *   STD  (0x0000): offset=0xDF750DC2C0, byte7 corr=0x34E4E74B50 mask=0xEC,
+ *                  ALARM_VEC for byte4 bit5, byte4 not in LFSR
+ *   x40  (0x0040): offset=0x61759A89E8, byte7 corr=0xC0DCB32C38 mask=0x2F,
+ *                  byte4 included in LFSR (no separate alarm handling)
  *
  * Usage:
- *   uint8_t pkt[21];          // raw 21-byte packet
- *   int ok = d3g_validate(pkt, D3G_GROUP_STD);
- *   // ok == 1 means valid, 0 means invalid, -1 means reboot (skip)
+ *   uint8_t pkt[21];
+ *   int ok = d3g_validate_std(pkt);   // for STD meters
+ *   int ok = d3g_validate_x40(pkt);   // for x40/Sonata meters
  */
 
 #include <stdint.h>
 
 /* ---- LFSR engine ---- */
 
-/*
- * 40-bit LFSR with 3 independent feedback taps at bit positions 39, 31, 23.
- * Seed: 0xA045A72F80. Generates 56 basis vectors for bytes 5-11 in sequence:
- * byte11[0-7], byte10[0-7], byte9[0-7], byte8[0-7], byte7[0-7], byte6[0-7], byte5[0-7]
- */
-static const uint64_t LFSR_SEED  = 0x51AAF3D980ULL;  /* byte 12 bit 0 */
-static const uint64_t LFSR_TAP_A = 0x00014013F8ULL;  /* feedback when bit 39 = 1 */
-static const uint64_t LFSR_TAP_B = 0x201080D890ULL;  /* feedback when bit 31 = 1 */
-static const uint64_t LFSR_TAP_C = 0x00018F36C8ULL;  /* feedback when bit 23 = 1 */
+static const uint64_t LFSR_SEED  = 0x51AAF3D980ULL;
+static const uint64_t LFSR_TAP_A = 0x00014013F8ULL;
+static const uint64_t LFSR_TAP_B = 0x201080D890ULL;
+static const uint64_t LFSR_TAP_C = 0x00018F36C8ULL;
 
 static uint64_t lfsr_step(uint64_t v)
 {
@@ -47,320 +36,220 @@ static uint64_t lfsr_step(uint64_t v)
     return ((v << 1) & 0xFFFFFFFFFFULL) ^ fb;
 }
 
-/* ---- Constants ---- */
+/* ---- STD group (0x00 0x00) ---- */
 
-/* No lookup tables — all 64 basis vectors generated from LFSR seed */
+#define STD_OFFSET      0xDF750DC2C0ULL
+#define STD_BYTE7_CORR  0x34E4E74B50ULL
+#define STD_BYTE7_MASK  0xEC              /* bits 2,3,5,6,7 */
+#define STD_ALARM_VEC   0xA8F1156730ULL   /* byte4 bit5 contribution */
+#define STD_NUM_BITS    105               /* 65 input + 40 scramble */
 
-/* Global offset (for group 0x0000 with STD byte-7 correction applied) */
-static const uint64_t OFFSET = 0xDF750DC2C0ULL;
-
-/* Byte-7 correction value */
-static const uint64_t BYTE7_CORR = 0x34E4E74B50ULL;
-
-/* General alarm flag contribution (byte 4 bit 5) */
-static const uint64_t ALARM_VEC = 0xA8F1156730ULL;
-
-/* ---- Group definitions ---- */
-
-/*
- * Each group has a correction bitmask for byte 7.
- * The mask selects which bit positions of byte 7 get XOR'd
- * with BYTE7_CORR before applying to the scramble.
- *
- * STD (0x00 0x00): bits 2,3,5,6,7 corrected = 0xEC
- * Other groups: not yet fully solved.
- */
-#define D3G_GROUP_STD  0xEC   /* standard meters (0x00 0x00) */
-/* #define D3G_GROUP_X40  0x??   x40/Sonata — not yet solved */
-
-/* ---- Validation ---- */
-
-/*
- * Compute expected scramble for the given packet and group.
- *
- * pkt:        21-byte raw packet
- * byte7_corr: byte-7 correction mask for this group (e.g. D3G_GROUP_STD)
- *
- * Returns the expected 40-bit scramble value.
- */
-static uint64_t d3g_expected(const uint8_t *pkt, uint8_t byte7_corr)
+static uint64_t std_expected(const uint8_t *pkt)
 {
-    uint64_t result = OFFSET;
+    uint64_t result = STD_OFFSET;
     uint64_t v = LFSR_SEED;
     int i;
 
-    /* LFSR sequence: byte12, byte11, byte10, byte9, byte8, byte7, byte6, byte5 */
-
-    /* byte 12 — consumption high */
-    for (i = 0; i < 8; i++) {
-        if (pkt[12] & (1 << i))
-            result ^= v;
+    for (i = 0; i < 40; i++) {  /* bytes 12,11,10,9,8 */
+        if (pkt[12 - i/8] & (1 << (i%8))) result ^= v;
         v = lfsr_step(v);
     }
-
-    /* byte 11 — consumption mid */
-    for (i = 0; i < 8; i++) {
-        if (pkt[11] & (1 << i))
-            result ^= v;
+    for (i = 0; i < 8; i++) {   /* byte 7 with correction */
+        uint64_t b = (STD_BYTE7_MASK & (1<<i)) ? (v ^ STD_BYTE7_CORR) : v;
+        if (pkt[7] & (1<<i)) result ^= b;
         v = lfsr_step(v);
     }
-
-    /* byte 10 — consumption low */
-    for (i = 0; i < 8; i++) {
-        if (pkt[10] & (1 << i))
-            result ^= v;
+    for (i = 0; i < 16; i++) {  /* bytes 6, 5 */
+        if (pkt[6 - i/8] & (1 << (i%8))) result ^= v;
         v = lfsr_step(v);
     }
-
-    /* byte 9 — group low */
-    for (i = 0; i < 8; i++) {
-        if (pkt[9] & (1 << i))
-            result ^= v;
-        v = lfsr_step(v);
-    }
-
-    /* byte 8 — group high */
-    for (i = 0; i < 8; i++) {
-        if (pkt[8] & (1 << i))
-            result ^= v;
-        v = lfsr_step(v);
-    }
-
-    /* byte 7 — ID LSB (group-specific correction) */
-    for (i = 0; i < 8; i++) {
-        uint64_t basis = v;
-        if (byte7_corr & (1 << i))
-            basis ^= BYTE7_CORR;
-        if (pkt[7] & (1 << i))
-            result ^= basis;
-        v = lfsr_step(v);
-    }
-
-    /* byte 6 — ID mid */
-    for (i = 0; i < 8; i++) {
-        if (pkt[6] & (1 << i))
-            result ^= v;
-        v = lfsr_step(v);
-    }
-
-    /* byte 5 — ID MSB */
-    for (i = 0; i < 8; i++) {
-        if (pkt[5] & (1 << i))
-            result ^= v;
-        v = lfsr_step(v);
-    }
-
-    /* byte 4 bit 5 — general alarm flag */
-    if (pkt[4] & 0x20)
-        result ^= ALARM_VEC;
-
+    if (pkt[4] & 0x20) result ^= STD_ALARM_VEC;
     return result;
 }
 
-/*
- * Build the syndrome table: 65 entries for input bits, 40 for scramble bits.
- * Each entry is the syndrome (40-bit value) produced by flipping that bit.
- *
- * Input bit layout (0-64):
- *   0-7:   byte 12 (consumption high)
- *   8-15:  byte 11 (consumption mid)
- *   16-23: byte 10 (consumption low)
- *   24-31: byte 9  (group low)
- *   32-39: byte 8  (group high)
- *   40-47: byte 7  (ID LSB, with correction)
- *   48-55: byte 6  (ID mid)
- *   56-63: byte 5  (ID MSB)
- *   64:    byte 4 bit 5 (alarm flag)
- *
- * Scramble bit layout (65-104):
- *   65+i:  bit i of the 40-bit scramble (bit 39 = MSB)
- */
-#define D3G_NUM_INPUT_BITS  65
-#define D3G_NUM_TOTAL_BITS  105
-
-static void d3g_build_syndromes(uint8_t byte7_corr, uint64_t *syn)
+static void std_build_syndromes(uint64_t *syn)
 {
     uint64_t v = LFSR_SEED;
     int i;
-
-    /* Bytes 12,11,10,9,8 — LFSR vectors directly */
-    for (i = 0; i < 40; i++) {
-        syn[i] = v;
-        v = lfsr_step(v);
-    }
-
-    /* Byte 7 — with correction */
+    for (i = 0; i < 40; i++) { syn[i] = v; v = lfsr_step(v); }
     for (i = 0; i < 8; i++) {
-        syn[40 + i] = (byte7_corr & (1 << i)) ? (v ^ BYTE7_CORR) : v;
+        syn[40+i] = (STD_BYTE7_MASK & (1<<i)) ? (v ^ STD_BYTE7_CORR) : v;
         v = lfsr_step(v);
     }
-
-    /* Bytes 6, 5 — LFSR vectors */
-    for (i = 0; i < 16; i++) {
-        syn[48 + i] = v;
-        v = lfsr_step(v);
-    }
-
-    /* Alarm flag */
-    syn[64] = ALARM_VEC;
-
-    /* Scramble bits: flipping bit i of scramble produces syndrome with just that bit */
-    for (i = 0; i < 40; i++)
-        syn[65 + i] = 1ULL << i;
+    for (i = 0; i < 16; i++) { syn[48+i] = v; v = lfsr_step(v); }
+    syn[64] = STD_ALARM_VEC;
+    for (i = 0; i < 40; i++) syn[65+i] = 1ULL << i;
 }
 
-/*
- * Map a syndrome table index back to a packet byte and bit position.
- * Fills *byte_pos and *bit_pos. For scramble bits, byte_pos is 15-19.
- */
-static void d3g_index_to_pos(int idx, int *byte_pos, int *bit_pos)
+/* ---- x40 group (0x00 0x40) ---- */
+
+#define X40_OFFSET      0x61759A89E8ULL
+#define X40_BYTE7_CORR  0xC0DCB32C38ULL
+#define X40_BYTE7_MASK  0x2F              /* bits 0,1,2,3,5 */
+#define X40_NUM_BITS    112               /* 72 input + 40 scramble */
+
+static uint64_t x40_expected(const uint8_t *pkt)
 {
-    static const int byte_map[] = {
-        12,12,12,12,12,12,12,12,  /* 0-7 */
-        11,11,11,11,11,11,11,11,  /* 8-15 */
-        10,10,10,10,10,10,10,10,  /* 16-23 */
-         9, 9, 9, 9, 9, 9, 9, 9,  /* 24-31 */
-         8, 8, 8, 8, 8, 8, 8, 8,  /* 32-39 */
-         7, 7, 7, 7, 7, 7, 7, 7,  /* 40-47 */
-         6, 6, 6, 6, 6, 6, 6, 6,  /* 48-55 */
-         5, 5, 5, 5, 5, 5, 5, 5,  /* 56-63 */
-         4,                        /* 64: alarm flag */
+    uint64_t result = X40_OFFSET;
+    uint64_t v = LFSR_SEED;
+    int i;
+
+    for (i = 0; i < 40; i++) {  /* bytes 12,11,10,9,8 */
+        if (pkt[12 - i/8] & (1 << (i%8))) result ^= v;
+        v = lfsr_step(v);
+    }
+    for (i = 0; i < 8; i++) {   /* byte 7 with correction */
+        uint64_t b = (X40_BYTE7_MASK & (1<<i)) ? (v ^ X40_BYTE7_CORR) : v;
+        if (pkt[7] & (1<<i)) result ^= b;
+        v = lfsr_step(v);
+    }
+    for (i = 0; i < 16; i++) {  /* bytes 6, 5 */
+        if (pkt[6 - i/8] & (1 << (i%8))) result ^= v;
+        v = lfsr_step(v);
+    }
+    for (i = 0; i < 8; i++) {   /* byte 4 (in LFSR for x40) */
+        if (pkt[4] & (1<<i)) result ^= v;
+        v = lfsr_step(v);
+    }
+    return result;
+}
+
+static void x40_build_syndromes(uint64_t *syn)
+{
+    uint64_t v = LFSR_SEED;
+    int i;
+    for (i = 0; i < 40; i++) { syn[i] = v; v = lfsr_step(v); }
+    for (i = 0; i < 8; i++) {
+        syn[40+i] = (X40_BYTE7_MASK & (1<<i)) ? (v ^ X40_BYTE7_CORR) : v;
+        v = lfsr_step(v);
+    }
+    for (i = 0; i < 16; i++) { syn[48+i] = v; v = lfsr_step(v); }
+    for (i = 0; i < 8; i++) { syn[64+i] = v; v = lfsr_step(v); }
+    for (i = 0; i < 40; i++) syn[72+i] = 1ULL << i;
+}
+
+/* ---- Error correction (shared) ---- */
+
+static void idx_to_pos_std(int idx, int *bp, int *bi)
+{
+    static const int bm[] = {
+        12,12,12,12,12,12,12,12, 11,11,11,11,11,11,11,11,
+        10,10,10,10,10,10,10,10,  9, 9, 9, 9, 9, 9, 9, 9,
+         8, 8, 8, 8, 8, 8, 8, 8,  7, 7, 7, 7, 7, 7, 7, 7,
+         6, 6, 6, 6, 6, 6, 6, 6,  5, 5, 5, 5, 5, 5, 5, 5, 4
     };
-
-    if (idx < D3G_NUM_INPUT_BITS) {
-        *byte_pos = byte_map[idx];
-        *bit_pos = (idx == 64) ? 5 : (idx % 8);
-    } else {
-        /* Scramble bits: index 65+i -> byte 15 + (39-i)/8, bit (39-i)%8 */
-        int scr_bit = idx - 65;  /* 0=bit0(LSB) .. 39=bit39(MSB) */
-        *byte_pos = 19 - scr_bit / 8;
-        *bit_pos = scr_bit % 8;
-    }
+    if (idx < 65) { *bp = bm[idx]; *bi = (idx==64) ? 5 : idx%8; }
+    else { int s = idx-65; *bp = 19-s/8; *bi = s%8; }
 }
 
-/*
- * Validate a 21-byte Dialog 3G packet with up to 3-bit error correction.
- *
- * pkt:        21-byte raw packet (MODIFIED in place if correction applied)
- * byte7_corr: byte-7 correction mask (D3G_GROUP_STD, etc.)
- *
- * Returns:
- *   0  = valid (no errors)
- *   1  = corrected 1-bit error
- *   2  = corrected 2-bit error
- *   3  = corrected 3-bit error
- *  -1  = reboot packet (skip)
- *  -2  = uncorrectable (4+ bit errors)
- */
-int d3g_validate(uint8_t *pkt, uint8_t byte7_corr)
+static void idx_to_pos_x40(int idx, int *bp, int *bi)
 {
-    /* Reboot alarm — consumption field contains other data */
-    if (pkt[4] & 0x80)
-        return -1;
+    static const int bm[] = {
+        12,12,12,12,12,12,12,12, 11,11,11,11,11,11,11,11,
+        10,10,10,10,10,10,10,10,  9, 9, 9, 9, 9, 9, 9, 9,
+         8, 8, 8, 8, 8, 8, 8, 8,  7, 7, 7, 7, 7, 7, 7, 7,
+         6, 6, 6, 6, 6, 6, 6, 6,  5, 5, 5, 5, 5, 5, 5, 5,
+         4, 4, 4, 4, 4, 4, 4, 4
+    };
+    if (idx < 72) { *bp = bm[idx]; *bi = idx%8; }
+    else { int s = idx-72; *bp = 19-s/8; *bi = s%8; }
+}
 
-    uint64_t expected = d3g_expected(pkt, byte7_corr);
-
-    uint64_t actual = ((uint64_t)pkt[15] << 32) | ((uint64_t)pkt[16] << 24) |
-                      ((uint64_t)pkt[17] << 16) | ((uint64_t)pkt[18] << 8) |
-                      (uint64_t)pkt[19];
-
-    uint64_t syndrome = expected ^ actual;
-
-    if (syndrome == 0)
-        return 0;
-
-    /* Build syndrome table */
-    uint64_t syn[D3G_NUM_TOTAL_BITS];
-    d3g_build_syndromes(byte7_corr, syn);
-
+static int correct_packet(uint8_t *pkt, uint64_t syndrome,
+                          uint64_t *syn, int num_bits,
+                          void (*idx_to_pos)(int, int*, int*))
+{
     int bp, bi;
 
-    /* Try 1-bit correction */
-    for (int i = 0; i < D3G_NUM_TOTAL_BITS; i++) {
+    for (int i = 0; i < num_bits; i++) {
         if (syn[i] == syndrome) {
-            d3g_index_to_pos(i, &bp, &bi);
+            idx_to_pos(i, &bp, &bi);
             pkt[bp] ^= (1 << bi);
             return 1;
         }
     }
-
-    /* Try 2-bit correction */
-    for (int i = 0; i < D3G_NUM_TOTAL_BITS; i++) {
+    for (int i = 0; i < num_bits; i++) {
         uint64_t r1 = syndrome ^ syn[i];
-        for (int j = i + 1; j < D3G_NUM_TOTAL_BITS; j++) {
+        for (int j = i+1; j < num_bits; j++) {
             if (syn[j] == r1) {
-                d3g_index_to_pos(i, &bp, &bi);
-                pkt[bp] ^= (1 << bi);
-                d3g_index_to_pos(j, &bp, &bi);
-                pkt[bp] ^= (1 << bi);
+                idx_to_pos(i, &bp, &bi); pkt[bp] ^= (1<<bi);
+                idx_to_pos(j, &bp, &bi); pkt[bp] ^= (1<<bi);
                 return 2;
             }
         }
     }
-
-    /* Try 3-bit correction */
-    for (int i = 0; i < D3G_NUM_TOTAL_BITS; i++) {
+    for (int i = 0; i < num_bits; i++) {
         uint64_t r1 = syndrome ^ syn[i];
-        for (int j = i + 1; j < D3G_NUM_TOTAL_BITS; j++) {
+        for (int j = i+1; j < num_bits; j++) {
             uint64_t r2 = r1 ^ syn[j];
-            for (int k = j + 1; k < D3G_NUM_TOTAL_BITS; k++) {
+            for (int k = j+1; k < num_bits; k++) {
                 if (syn[k] == r2) {
-                    d3g_index_to_pos(i, &bp, &bi);
-                    pkt[bp] ^= (1 << bi);
-                    d3g_index_to_pos(j, &bp, &bi);
-                    pkt[bp] ^= (1 << bi);
-                    d3g_index_to_pos(k, &bp, &bi);
-                    pkt[bp] ^= (1 << bi);
+                    idx_to_pos(i, &bp, &bi); pkt[bp] ^= (1<<bi);
+                    idx_to_pos(j, &bp, &bi); pkt[bp] ^= (1<<bi);
+                    idx_to_pos(k, &bp, &bi); pkt[bp] ^= (1<<bi);
                     return 3;
                 }
             }
         }
     }
+    return -2;
+}
 
-    return -2;  /* uncorrectable */
+/*
+ * Validate STD packet. Returns 0=valid, 1/2/3=corrected, -1=reboot, -2=bad.
+ */
+int d3g_validate_std(uint8_t *pkt)
+{
+    if (pkt[4] & 0x80) return -1;
+    uint64_t exp = std_expected(pkt);
+    uint64_t act = ((uint64_t)pkt[15]<<32)|((uint64_t)pkt[16]<<24)|
+                   ((uint64_t)pkt[17]<<16)|((uint64_t)pkt[18]<<8)|pkt[19];
+    uint64_t syn_val = exp ^ act;
+    if (syn_val == 0) return 0;
+    uint64_t syn[STD_NUM_BITS];
+    std_build_syndromes(syn);
+    return correct_packet(pkt, syn_val, syn, STD_NUM_BITS, idx_to_pos_std);
+}
+
+/*
+ * Validate x40/Sonata packet. Returns 0=valid, 1/2/3=corrected, -1=reboot, -2=bad.
+ */
+int d3g_validate_x40(uint8_t *pkt)
+{
+    if (pkt[4] & 0x80) return -1;
+    uint64_t exp = x40_expected(pkt);
+    uint64_t act = ((uint64_t)pkt[15]<<32)|((uint64_t)pkt[16]<<24)|
+                   ((uint64_t)pkt[17]<<16)|((uint64_t)pkt[18]<<8)|pkt[19];
+    uint64_t syn_val = exp ^ act;
+    if (syn_val == 0) return 0;
+    uint64_t syn[X40_NUM_BITS];
+    x40_build_syndromes(syn);
+    return correct_packet(pkt, syn_val, syn, X40_NUM_BITS, idx_to_pos_x40);
+}
+
+/*
+ * Auto-detect group and validate.
+ */
+int d3g_validate(uint8_t *pkt)
+{
+    if (pkt[8] == 0x00 && pkt[9] == 0x00) return d3g_validate_std(pkt);
+    if (pkt[9] == 0x40)                    return d3g_validate_x40(pkt);
+    return -2;  /* unknown group */
 }
 
 /*
  * Derive the meter constant (strips consumption contribution).
- * Useful for two-packet confirmation on unsolved groups.
- *
- * Returns OFFSET ^ M_id(meter_id) ^ M_group(group) ^ M_flag(flags)
- * which is constant for a given meter in a given alarm state.
  */
 uint64_t d3g_derive_constant(const uint8_t *pkt)
 {
-    uint64_t actual = ((uint64_t)pkt[15] << 32) | ((uint64_t)pkt[16] << 24) |
-                      ((uint64_t)pkt[17] << 16) | ((uint64_t)pkt[18] << 8) |
-                      (uint64_t)pkt[19];
-
+    uint64_t actual = ((uint64_t)pkt[15]<<32)|((uint64_t)pkt[16]<<24)|
+                      ((uint64_t)pkt[17]<<16)|((uint64_t)pkt[18]<<8)|pkt[19];
     uint64_t result = actual;
     uint64_t v = LFSR_SEED;
     int i;
-
-    /* Strip byte 12 */
-    for (i = 0; i < 8; i++) {
-        if (pkt[12] & (1 << i))
-            result ^= v;
+    for (i = 0; i < 24; i++) {
+        if (pkt[12 - i/8] & (1 << (i%8))) result ^= v;
         v = lfsr_step(v);
     }
-
-    /* Strip byte 11 */
-    for (i = 0; i < 8; i++) {
-        if (pkt[11] & (1 << i))
-            result ^= v;
-        v = lfsr_step(v);
-    }
-
-    /* Strip byte 10 */
-    for (i = 0; i < 8; i++) {
-        if (pkt[10] & (1 << i))
-            result ^= v;
-        v = lfsr_step(v);
-    }
-
-    /* Strip alarm flag */
-    if (pkt[4] & 0x20)
-        result ^= ALARM_VEC;
-
     return result;
 }
