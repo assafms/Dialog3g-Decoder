@@ -2,9 +2,9 @@
 #include "xl4432_spi_sensor.h"
 #include "xl4432.h"
 
-// 40-bit LFSR with 3 feedback taps — generates all basis vectors for bytes 5-11
-// Seed generates 56 vectors in sequence: byte11, byte10, byte9, byte8, byte7, byte6, byte5
-static const uint64_t LFSR_SEED  = 0xA045A72F80ULL;
+// 40-bit LFSR with 3 feedback taps — generates all 64 basis vectors for bytes 5-12
+// Seed generates 64 vectors in sequence: byte12, byte11, byte10, byte9, byte8, byte7, byte6, byte5
+static const uint64_t LFSR_SEED  = 0x51AAF3D980ULL;  // byte 12 bit 0
 static const uint64_t LFSR_TAP_A = 0x00014013F8ULL;  // feedback when bit 39 = 1
 static const uint64_t LFSR_TAP_B = 0x201080D890ULL;  // feedback when bit 31 = 1
 static const uint64_t LFSR_TAP_C = 0x00018F36C8ULL;  // feedback when bit 23 = 1
@@ -16,11 +16,7 @@ static const uint8_t  STD_CORRECTION_MASK = 0xEC;  // bits 2,3,5,6,7
 // General alarm flag (byte 4 bit 5) scramble contribution
 static const uint64_t ALARM_VEC = 0xA8F1156730ULL;
 
-// CONS_BASIS[16-23] — byte 12, not part of LFSR, stored separately
-static const uint64_t CONS_HI[8] = {
-    0x51AAF3D980ULL, 0x2826118BE0ULL, 0xADEBE64938ULL, 0x2D02BFE790ULL,
-    0x5A04F0F9E8ULL, 0xB4086EC518ULL, 0xC0E088FEF8ULL, 0xD022B40558ULL,
-};
+// Byte 12 is now part of the LFSR — no separate table needed
 
 // Global offset (for group 0x0000 with STD byte-7 correction applied)
 static const uint64_t OFFSET = 0xDF750DC2C0ULL;
@@ -65,8 +61,15 @@ uint64_t Xl4432::expectedScramble()
 	}
 
 	// Generate basis vectors via LFSR and apply to input bytes
-	// Sequence: byte11, byte10, byte9, byte8, byte7, byte6, byte5
+	// Sequence: byte12, byte11, byte10, byte9, byte8, byte7, byte6, byte5
 	uint64_t v = LFSR_SEED;
+
+	// Byte 12 (consumption bits 16-23)
+	for (int i = 0; i < 8; i++) {
+		if (packet[12] & (1 << i))
+			result ^= v;
+		v = lfsr_next(v);
+	}
 
 	// Byte 11 (consumption bits 8-15)
 	for (int i = 0; i < 8; i++) {
@@ -120,12 +123,6 @@ uint64_t Xl4432::expectedScramble()
 		v = lfsr_next(v);
 	}
 
-	// Byte 12 (consumption bits 16-23 — separate, not LFSR)
-	for (int i = 0; i < 8; i++) {
-		if (packet[12] & (1 << i))
-			result ^= CONS_HI[i];
-	}
-
 	// Byte 4 bit 5: general alarm flag
 	if (packet[4] & 0x20)
 		result ^= ALARM_VEC;
@@ -141,8 +138,14 @@ uint64_t Xl4432::deriveConstant()
 	                  (uint64_t)packet[19];
 	uint64_t result = actual;
 
-	// Strip consumption contribution using LFSR
+	// Strip consumption contribution using LFSR (byte12, byte11, byte10)
 	uint64_t v = LFSR_SEED;
+	// Byte 12
+	for (int i = 0; i < 8; i++) {
+		if (packet[12] & (1 << i))
+			result ^= v;
+		v = lfsr_next(v);
+	}
 	// Byte 11
 	for (int i = 0; i < 8; i++) {
 		if (packet[11] & (1 << i))
@@ -154,11 +157,6 @@ uint64_t Xl4432::deriveConstant()
 		if (packet[10] & (1 << i))
 			result ^= v;
 		v = lfsr_next(v);
-	}
-	// Byte 12 (separate)
-	for (int i = 0; i < 8; i++) {
-		if (packet[12] & (1 << i))
-			result ^= CONS_HI[i];
 	}
 
 	return result;
@@ -200,17 +198,15 @@ PacketStatus Xl4432::validatePacket()
 		static const int SYN_COUNT = 105;
 		uint64_t syn[SYN_COUNT];
 		uint64_t v = LFSR_SEED;
-		// Bytes 11,10,9,8
-		for (int i = 0; i < 32; i++) { syn[i] = v; v = lfsr_next(v); }
+		// Bytes 12,11,10,9,8
+		for (int i = 0; i < 40; i++) { syn[i] = v; v = lfsr_next(v); }
 		// Byte 7 with correction
 		for (int i = 0; i < 8; i++) {
-			syn[32+i] = (STD_CORRECTION_MASK & (1<<i)) ? (v ^ BYTE7_CORRECTION) : v;
+			syn[40+i] = (STD_CORRECTION_MASK & (1<<i)) ? (v ^ BYTE7_CORRECTION) : v;
 			v = lfsr_next(v);
 		}
 		// Bytes 6, 5
-		for (int i = 0; i < 16; i++) { syn[40+i] = v; v = lfsr_next(v); }
-		// Byte 12
-		for (int i = 0; i < 8; i++) syn[56+i] = CONS_HI[i];
+		for (int i = 0; i < 16; i++) { syn[48+i] = v; v = lfsr_next(v); }
 		// Alarm flag
 		syn[64] = ALARM_VEC;
 		// Scramble bits
@@ -218,10 +214,10 @@ PacketStatus Xl4432::validatePacket()
 
 		// Bit index -> packet byte/bit
 		static const uint8_t idx_byte[] = {
-			11,11,11,11,11,11,11,11, 10,10,10,10,10,10,10,10,
-			 9, 9, 9, 9, 9, 9, 9, 9,  8, 8, 8, 8, 8, 8, 8, 8,
-			 7, 7, 7, 7, 7, 7, 7, 7,  6, 6, 6, 6, 6, 6, 6, 6,
-			 5, 5, 5, 5, 5, 5, 5, 5, 12,12,12,12,12,12,12,12,
+			12,12,12,12,12,12,12,12, 11,11,11,11,11,11,11,11,
+			10,10,10,10,10,10,10,10,  9, 9, 9, 9, 9, 9, 9, 9,
+			 8, 8, 8, 8, 8, 8, 8, 8,  7, 7, 7, 7, 7, 7, 7, 7,
+			 6, 6, 6, 6, 6, 6, 6, 6,  5, 5, 5, 5, 5, 5, 5, 5,
 			 4
 		};
 

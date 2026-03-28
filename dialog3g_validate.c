@@ -33,7 +33,7 @@
  * Seed: 0xA045A72F80. Generates 56 basis vectors for bytes 5-11 in sequence:
  * byte11[0-7], byte10[0-7], byte9[0-7], byte8[0-7], byte7[0-7], byte6[0-7], byte5[0-7]
  */
-static const uint64_t LFSR_SEED  = 0xA045A72F80ULL;
+static const uint64_t LFSR_SEED  = 0x51AAF3D980ULL;  /* byte 12 bit 0 */
 static const uint64_t LFSR_TAP_A = 0x00014013F8ULL;  /* feedback when bit 39 = 1 */
 static const uint64_t LFSR_TAP_B = 0x201080D890ULL;  /* feedback when bit 31 = 1 */
 static const uint64_t LFSR_TAP_C = 0x00018F36C8ULL;  /* feedback when bit 23 = 1 */
@@ -49,11 +49,10 @@ static uint64_t lfsr_step(uint64_t v)
 
 /* ---- Constants ---- */
 
-/* Byte 12 (consumption bits 16-23) — not part of the LFSR */
-static const uint64_t CONS_HI[8] = {
-    0x51AAF3D980ULL, 0x2826118BE0ULL, 0xADEBE64938ULL, 0x2D02BFE790ULL,
-    0x5A04F0F9E8ULL, 0xB4086EC518ULL, 0xC0E088FEF8ULL, 0xD022B40558ULL,
-};
+/* Byte 12 is part of the LFSR — it precedes byte 11 in the sequence.
+ * Full LFSR order: byte12, byte11, byte10, byte9, byte8, byte7, byte6, byte5
+ * Seed 0x51AAF3D980 is byte12 bit 0, the start of the full 64-vector sequence.
+ */
 
 /* Global offset (for group 0x0000 with STD byte-7 correction applied) */
 static const uint64_t OFFSET = 0xDF750DC2C0ULL;
@@ -92,6 +91,15 @@ static uint64_t d3g_expected(const uint8_t *pkt, uint8_t byte7_corr)
     uint64_t result = OFFSET;
     uint64_t v = LFSR_SEED;
     int i;
+
+    /* LFSR sequence: byte12, byte11, byte10, byte9, byte8, byte7, byte6, byte5 */
+
+    /* byte 12 — consumption high */
+    for (i = 0; i < 8; i++) {
+        if (pkt[12] & (1 << i))
+            result ^= v;
+        v = lfsr_step(v);
+    }
 
     /* byte 11 — consumption mid */
     for (i = 0; i < 8; i++) {
@@ -145,12 +153,6 @@ static uint64_t d3g_expected(const uint8_t *pkt, uint8_t byte7_corr)
         v = lfsr_step(v);
     }
 
-    /* byte 12 — consumption high (separate table) */
-    for (i = 0; i < 8; i++) {
-        if (pkt[12] & (1 << i))
-            result ^= CONS_HI[i];
-    }
-
     /* byte 4 bit 5 — general alarm flag */
     if (pkt[4] & 0x20)
         result ^= ALARM_VEC;
@@ -163,14 +165,14 @@ static uint64_t d3g_expected(const uint8_t *pkt, uint8_t byte7_corr)
  * Each entry is the syndrome (40-bit value) produced by flipping that bit.
  *
  * Input bit layout (0-64):
- *   0-7:   byte 11 (consumption mid)
- *   8-15:  byte 10 (consumption low)
- *   16-23: byte 9  (group low)
- *   24-31: byte 8  (group high)
- *   32-39: byte 7  (ID LSB, with correction)
- *   40-47: byte 6  (ID mid)
- *   48-55: byte 5  (ID MSB)
- *   56-63: byte 12 (consumption high)
+ *   0-7:   byte 12 (consumption high)
+ *   8-15:  byte 11 (consumption mid)
+ *   16-23: byte 10 (consumption low)
+ *   24-31: byte 9  (group low)
+ *   32-39: byte 8  (group high)
+ *   40-47: byte 7  (ID LSB, with correction)
+ *   48-55: byte 6  (ID mid)
+ *   56-63: byte 5  (ID MSB)
  *   64:    byte 4 bit 5 (alarm flag)
  *
  * Scramble bit layout (65-104):
@@ -184,27 +186,23 @@ static void d3g_build_syndromes(uint8_t byte7_corr, uint64_t *syn)
     uint64_t v = LFSR_SEED;
     int i;
 
-    /* Bytes 11,10,9,8 — LFSR vectors directly */
-    for (i = 0; i < 32; i++) {
+    /* Bytes 12,11,10,9,8 — LFSR vectors directly */
+    for (i = 0; i < 40; i++) {
         syn[i] = v;
         v = lfsr_step(v);
     }
 
     /* Byte 7 — with correction */
     for (i = 0; i < 8; i++) {
-        syn[32 + i] = (byte7_corr & (1 << i)) ? (v ^ BYTE7_CORR) : v;
+        syn[40 + i] = (byte7_corr & (1 << i)) ? (v ^ BYTE7_CORR) : v;
         v = lfsr_step(v);
     }
 
     /* Bytes 6, 5 — LFSR vectors */
     for (i = 0; i < 16; i++) {
-        syn[40 + i] = v;
+        syn[48 + i] = v;
         v = lfsr_step(v);
     }
-
-    /* Byte 12 — separate table */
-    for (i = 0; i < 8; i++)
-        syn[56 + i] = CONS_HI[i];
 
     /* Alarm flag */
     syn[64] = ALARM_VEC;
@@ -221,14 +219,14 @@ static void d3g_build_syndromes(uint8_t byte7_corr, uint64_t *syn)
 static void d3g_index_to_pos(int idx, int *byte_pos, int *bit_pos)
 {
     static const int byte_map[] = {
-        11,11,11,11,11,11,11,11,  /* 0-7 */
-        10,10,10,10,10,10,10,10,  /* 8-15 */
-         9, 9, 9, 9, 9, 9, 9, 9,  /* 16-23 */
-         8, 8, 8, 8, 8, 8, 8, 8,  /* 24-31 */
-         7, 7, 7, 7, 7, 7, 7, 7,  /* 32-39 */
-         6, 6, 6, 6, 6, 6, 6, 6,  /* 40-47 */
-         5, 5, 5, 5, 5, 5, 5, 5,  /* 48-55 */
-        12,12,12,12,12,12,12,12,  /* 56-63 */
+        12,12,12,12,12,12,12,12,  /* 0-7 */
+        11,11,11,11,11,11,11,11,  /* 8-15 */
+        10,10,10,10,10,10,10,10,  /* 16-23 */
+         9, 9, 9, 9, 9, 9, 9, 9,  /* 24-31 */
+         8, 8, 8, 8, 8, 8, 8, 8,  /* 32-39 */
+         7, 7, 7, 7, 7, 7, 7, 7,  /* 40-47 */
+         6, 6, 6, 6, 6, 6, 6, 6,  /* 48-55 */
+         5, 5, 5, 5, 5, 5, 5, 5,  /* 56-63 */
          4,                        /* 64: alarm flag */
     };
 
@@ -342,6 +340,13 @@ uint64_t d3g_derive_constant(const uint8_t *pkt)
     uint64_t v = LFSR_SEED;
     int i;
 
+    /* Strip byte 12 */
+    for (i = 0; i < 8; i++) {
+        if (pkt[12] & (1 << i))
+            result ^= v;
+        v = lfsr_step(v);
+    }
+
     /* Strip byte 11 */
     for (i = 0; i < 8; i++) {
         if (pkt[11] & (1 << i))
@@ -354,12 +359,6 @@ uint64_t d3g_derive_constant(const uint8_t *pkt)
         if (pkt[10] & (1 << i))
             result ^= v;
         v = lfsr_step(v);
-    }
-
-    /* Strip byte 12 */
-    for (i = 0; i < 8; i++) {
-        if (pkt[12] & (1 << i))
-            result ^= CONS_HI[i];
     }
 
     /* Strip alarm flag */
