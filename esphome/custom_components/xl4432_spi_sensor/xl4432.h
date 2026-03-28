@@ -41,6 +41,7 @@ class Xl4432 {
 	bool     hasStoredConstant;
 
 	float extractMeterReading();
+	void  binToHexString();
 
   private:
 	void  readPacketFromFifo();
@@ -49,5 +50,4 @@ class Xl4432 {
 	void  spiReadPacketFromFifo(uint8_t length);
 	uint8_t spiReadRegister(uint8_t addr);
 	void  spiWriteRegister(uint8_t addr, uint8_t data);
-	void  binToHexString();
 };

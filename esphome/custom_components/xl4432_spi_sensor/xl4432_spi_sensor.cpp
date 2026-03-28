@@ -113,14 +113,10 @@ if (!xl4432.packetReady)
 
 xl4432.packetReady = 0;
 
-// Always send to TCP clients (sniff format)
-{
+if (PACKET_SNIFF) {
     char tcp_line[64];
     snprintf(tcp_line, sizeof(tcp_line), "[sniff:916300000]: %s", xl4432.output);
     send_to_clients(tcp_line);
-}
-
-if (PACKET_SNIFF) {
     ESP_LOGI("sniff", "%s", xl4432.output);
     return;
 }
@@ -128,12 +124,13 @@ if (PACKET_SNIFF) {
 PacketStatus status = xl4432.validatePacket();
 stat_total_++;
 
+// Tag: OK, F1/F2/F3 (fixed), BAD, 2PK, NS, or other
+const char *tag = "??";
 switch (status) {
     case PKT_VALID:
+        tag = "OK";
         stat_valid_++;
         publish_state(xl4432.meterMeasurment);
-        ESP_LOGI("gf2", "Valid: reading=%.1f pkt=%s",
-                 xl4432.meterMeasurment, xl4432.output);
         break;
 
     case PKT_CORRECTED_1:
@@ -142,37 +139,42 @@ switch (status) {
         int nbits = status - PKT_CORRECTED_1 + 1;
         stat_corrected_[nbits - 1]++;
         xl4432.meterMeasurment = xl4432.extractMeterReading();
+        xl4432.binToHexString();  // update output with corrected packet
         publish_state(xl4432.meterMeasurment);
-        ESP_LOGI("gf2", "Corrected (%dbit): reading=%.1f pkt=%s",
-                 nbits, xl4432.meterMeasurment, xl4432.output);
+        tag = nbits == 1 ? "F1" : nbits == 2 ? "F2" : "F3";
         break;
     }
 
     case PKT_INVALID:
+        tag = "BAD";
         stat_invalid_++;
-        ESP_LOGW("gf2", "RF error: reading=%.1f pkt=%s",
-                 xl4432.meterMeasurment, xl4432.output);
         break;
 
     case PKT_ID_MISMATCH:
         ESP_LOGD("gf2", "Other meter: %s", xl4432.output);
-        break;
+        goto skip_log;
 
     case PKT_VALID_TWO_PKT:
+        tag = "2PK";
         stat_valid_++;
         publish_state(xl4432.meterMeasurment);
-        ESP_LOGI("gf2", "Valid (2pkt): reading=%.1f pkt=%s",
-                 xl4432.meterMeasurment, xl4432.output);
         break;
 
     case PKT_NON_STANDARD:
-        ESP_LOGI("gf2", "Non-std first pkt: reading=%.1f pkt=%s",
-                 xl4432.meterMeasurment, xl4432.output);
+        tag = "NS";
         break;
 
     default:
         break;
 }
+
+{
+    char tcp_line[80];
+    snprintf(tcp_line, sizeof(tcp_line), "[sniff:916300000]: %s", xl4432.output);
+    send_to_clients(tcp_line);
+    ESP_LOGI("gf2", "[%s] reading=%.1f pkt=%s", tag, xl4432.meterMeasurment, xl4432.output);
+}
+skip_log:
 
 // Log stats every 10 packets
 if (stat_total_ > 0 && stat_total_ % 10 == 0) {
