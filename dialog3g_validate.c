@@ -1,21 +1,22 @@
 /*
- * Arad Dialog 3G / Sonata — packet validation with up to 3-bit error correction
+ * Arad Dialog 3G — unified packet validation with up to 3-bit error correction
  *
  * All basis vectors are consecutive states of a 40-bit LFSR with 3 feedback taps.
  * LFSR: next = (v << 1) ^ (TAP_A if bit39) ^ (TAP_B if bit31) ^ (TAP_C if bit23)
  * Seed: 0x51AAF3D980 (byte 12 bit 0)
- * Sequence: byte12, byte11, byte10, byte9, byte8, byte7, byte6, byte5, byte4, ...
  *
- * Per-group differences:
- *   STD  (0x0000): offset=0xDF750DC2C0, byte7 corr=0x34E4E74B50 mask=0xEC,
- *                  ALARM_VEC for byte4 bit5, byte4 not in LFSR
- *   x40  (0x0040): offset=0x61759A89E8, byte7 corr=0xC0DCB32C38 mask=0x2F,
- *                  byte4 included in LFSR (no separate alarm handling)
+ * Forward chain:  byte12 → byte11 → byte10 → byte9 → byte8 → byte7 → byte6 →
+ *                 byte5 → byte4 → byte3 → byte2 → byte1 → byte0
+ * Backward chain: byte13 → byte14  (LFSR inverse from seed)
+ *
+ * One model for all groups (STD, x40, 3D0C):
+ *   - Pure LFSR vectors for ALL data bytes 0-14 (120 bits)
+ *   - Single universal offset: 0x6FF11521E8
+ *   - No per-group corrections
  *
  * Usage:
  *   uint8_t pkt[21];
- *   int ok = d3g_validate_std(pkt);   // for STD meters
- *   int ok = d3g_validate_x40(pkt);   // for x40/Sonata meters
+ *   int ok = d3g_validate(pkt);
  */
 
 #include <stdint.h>
@@ -36,157 +37,128 @@ static uint64_t lfsr_step(uint64_t v)
     return ((v << 1) & 0xFFFFFFFFFFULL) ^ fb;
 }
 
-/* ---- STD group (0x00 0x00) ---- */
+/* ---- Backward LFSR vectors (bytes 13-14, from French research) ---- */
 
-#define STD_OFFSET      0xDF750DC2C0ULL
-#define STD_BYTE7_CORR  0x34E4E74B50ULL
-#define STD_BYTE7_MASK  0xEC              /* bits 2,3,5,6,7 */
-#define STD_ALARM_VEC   0xA8F1156730ULL   /* byte4 bit5 contribution */
-#define STD_NUM_BITS    105               /* 65 input + 40 scramble */
+static const uint64_t BYTE13_VEC[8] = {
+    0xB476FE6BB0ULL, 0x68ED33F250ULL, 0xF1CAE73C30ULL, 0xC3858185C0ULL,
+    0xA71B4CF620ULL, 0x4E37D9FFB8ULL, 0x9C6E3CC9B8ULL, 0x38DD398088ULL
+};
+static const uint64_t BYTE14_VEC[8] = {
+    0x3037889DD8ULL, 0x606E9E0D78ULL, 0xC0DCB32C38ULL, 0xA1A929A5D0ULL,
+    0x63439380C8ULL, 0xC686A83758ULL, 0xAD1D1F9310ULL, 0x5A3B7F35D8ULL
+};
 
-static uint64_t std_expected(const uint8_t *pkt)
+/* ---- Universal offset ---- */
+
+#define OFFSET          0x6FF11521E8ULL
+#define NUM_DATA_BITS   120           /* bytes 0-14 = 15 bytes */
+#define NUM_TOTAL_BITS  160           /* 120 data + 40 scramble */
+
+/* ---- Compute expected scramble ---- */
+
+static uint64_t d3g_expected(const uint8_t *pkt)
 {
-    uint64_t result = STD_OFFSET;
-    uint64_t v = LFSR_SEED;
+    uint64_t result = OFFSET;
+    uint64_t v;
     int i;
 
-    for (i = 0; i < 40; i++) {  /* bytes 12,11,10,9,8 */
+    /* byte 14 (8 bits, backward LFSR) */
+    for (i = 0; i < 8; i++)
+        if (pkt[14] & (1 << i)) result ^= BYTE14_VEC[i];
+
+    /* byte 13 (8 bits, backward LFSR) */
+    for (i = 0; i < 8; i++)
+        if (pkt[13] & (1 << i)) result ^= BYTE13_VEC[i];
+
+    /* bytes 12 down to 0 (104 bits, forward LFSR from seed) */
+    v = LFSR_SEED;
+    for (i = 0; i < 104; i++) {
         if (pkt[12 - i/8] & (1 << (i%8))) result ^= v;
         v = lfsr_step(v);
     }
-    for (i = 0; i < 8; i++) {   /* byte 7 with correction */
-        uint64_t b = (STD_BYTE7_MASK & (1<<i)) ? (v ^ STD_BYTE7_CORR) : v;
-        if (pkt[7] & (1<<i)) result ^= b;
-        v = lfsr_step(v);
-    }
-    for (i = 0; i < 16; i++) {  /* bytes 6, 5 */
-        if (pkt[6 - i/8] & (1 << (i%8))) result ^= v;
-        v = lfsr_step(v);
-    }
-    if (pkt[4] & 0x20) result ^= STD_ALARM_VEC;
+
     return result;
 }
 
-static void std_build_syndromes(uint64_t *syn)
+/* ---- Build syndrome table ---- */
+
+static void d3g_build_syndromes(uint64_t *syn)
 {
-    uint64_t v = LFSR_SEED;
     int i;
-    for (i = 0; i < 40; i++) { syn[i] = v; v = lfsr_step(v); }
-    for (i = 0; i < 8; i++) {
-        syn[40+i] = (STD_BYTE7_MASK & (1<<i)) ? (v ^ STD_BYTE7_CORR) : v;
+    uint64_t v;
+
+    /* byte 14 */
+    for (i = 0; i < 8; i++) syn[i] = BYTE14_VEC[i];
+
+    /* byte 13 */
+    for (i = 0; i < 8; i++) syn[8 + i] = BYTE13_VEC[i];
+
+    /* bytes 12 down to 0 */
+    v = LFSR_SEED;
+    for (i = 0; i < 104; i++) {
+        syn[16 + i] = v;
         v = lfsr_step(v);
     }
-    for (i = 0; i < 16; i++) { syn[48+i] = v; v = lfsr_step(v); }
-    syn[64] = STD_ALARM_VEC;
-    for (i = 0; i < 40; i++) syn[65+i] = 1ULL << i;
+
+    /* scramble bits (bytes 15-19) */
+    for (i = 0; i < 40; i++) syn[120 + i] = 1ULL << i;
 }
 
-/* ---- x40 group (0x00 0x40) ---- */
+/* ---- Index to packet position mapping ---- */
 
-#define X40_OFFSET      0x61759A89E8ULL
-#define X40_BYTE7_CORR  0xC0DCB32C38ULL
-#define X40_BYTE7_MASK  0x2F              /* bits 0,1,2,3,5 */
-#define X40_NUM_BITS    112               /* 72 input + 40 scramble */
-
-static uint64_t x40_expected(const uint8_t *pkt)
+static void idx_to_pos(int idx, int *bp, int *bi)
 {
-    uint64_t result = X40_OFFSET;
-    uint64_t v = LFSR_SEED;
-    int i;
-
-    for (i = 0; i < 40; i++) {  /* bytes 12,11,10,9,8 */
-        if (pkt[12 - i/8] & (1 << (i%8))) result ^= v;
-        v = lfsr_step(v);
+    if (idx < 8) {
+        /* byte 14 */
+        *bp = 14; *bi = idx;
+    } else if (idx < 16) {
+        /* byte 13 */
+        *bp = 13; *bi = idx - 8;
+    } else if (idx < 120) {
+        /* bytes 12 down to 0 */
+        int k = idx - 16;
+        *bp = 12 - k/8;
+        *bi = k % 8;
+    } else {
+        /* scramble bytes 15-19 */
+        int s = idx - 120;
+        *bp = 19 - s/8;
+        *bi = s % 8;
     }
-    for (i = 0; i < 8; i++) {   /* byte 7 with correction */
-        uint64_t b = (X40_BYTE7_MASK & (1<<i)) ? (v ^ X40_BYTE7_CORR) : v;
-        if (pkt[7] & (1<<i)) result ^= b;
-        v = lfsr_step(v);
-    }
-    for (i = 0; i < 16; i++) {  /* bytes 6, 5 */
-        if (pkt[6 - i/8] & (1 << (i%8))) result ^= v;
-        v = lfsr_step(v);
-    }
-    for (i = 0; i < 8; i++) {   /* byte 4 (in LFSR for x40) */
-        if (pkt[4] & (1<<i)) result ^= v;
-        v = lfsr_step(v);
-    }
-    return result;
 }
 
-static void x40_build_syndromes(uint64_t *syn)
-{
-    uint64_t v = LFSR_SEED;
-    int i;
-    for (i = 0; i < 40; i++) { syn[i] = v; v = lfsr_step(v); }
-    for (i = 0; i < 8; i++) {
-        syn[40+i] = (X40_BYTE7_MASK & (1<<i)) ? (v ^ X40_BYTE7_CORR) : v;
-        v = lfsr_step(v);
-    }
-    for (i = 0; i < 16; i++) { syn[48+i] = v; v = lfsr_step(v); }
-    for (i = 0; i < 8; i++) { syn[64+i] = v; v = lfsr_step(v); }
-    for (i = 0; i < 40; i++) syn[72+i] = 1ULL << i;
-}
+/* ---- Error correction (up to 3 bits) ---- */
 
-/* ---- Error correction (shared) ---- */
-
-static void idx_to_pos_std(int idx, int *bp, int *bi)
-{
-    static const int bm[] = {
-        12,12,12,12,12,12,12,12, 11,11,11,11,11,11,11,11,
-        10,10,10,10,10,10,10,10,  9, 9, 9, 9, 9, 9, 9, 9,
-         8, 8, 8, 8, 8, 8, 8, 8,  7, 7, 7, 7, 7, 7, 7, 7,
-         6, 6, 6, 6, 6, 6, 6, 6,  5, 5, 5, 5, 5, 5, 5, 5, 4
-    };
-    if (idx < 65) { *bp = bm[idx]; *bi = (idx==64) ? 5 : idx%8; }
-    else { int s = idx-65; *bp = 19-s/8; *bi = s%8; }
-}
-
-static void idx_to_pos_x40(int idx, int *bp, int *bi)
-{
-    static const int bm[] = {
-        12,12,12,12,12,12,12,12, 11,11,11,11,11,11,11,11,
-        10,10,10,10,10,10,10,10,  9, 9, 9, 9, 9, 9, 9, 9,
-         8, 8, 8, 8, 8, 8, 8, 8,  7, 7, 7, 7, 7, 7, 7, 7,
-         6, 6, 6, 6, 6, 6, 6, 6,  5, 5, 5, 5, 5, 5, 5, 5,
-         4, 4, 4, 4, 4, 4, 4, 4
-    };
-    if (idx < 72) { *bp = bm[idx]; *bi = idx%8; }
-    else { int s = idx-72; *bp = 19-s/8; *bi = s%8; }
-}
-
-static int correct_packet(uint8_t *pkt, uint64_t syndrome,
-                          uint64_t *syn, int num_bits,
-                          void (*idx_to_pos)(int, int*, int*))
+static int correct_packet(uint8_t *pkt, uint64_t syndrome, uint64_t *syn)
 {
     int bp, bi;
 
-    for (int i = 0; i < num_bits; i++) {
+    for (int i = 0; i < NUM_TOTAL_BITS; i++) {
         if (syn[i] == syndrome) {
             idx_to_pos(i, &bp, &bi);
             pkt[bp] ^= (1 << bi);
             return 1;
         }
     }
-    for (int i = 0; i < num_bits; i++) {
+    for (int i = 0; i < NUM_TOTAL_BITS; i++) {
         uint64_t r1 = syndrome ^ syn[i];
-        for (int j = i+1; j < num_bits; j++) {
+        for (int j = i+1; j < NUM_TOTAL_BITS; j++) {
             if (syn[j] == r1) {
-                idx_to_pos(i, &bp, &bi); pkt[bp] ^= (1<<bi);
-                idx_to_pos(j, &bp, &bi); pkt[bp] ^= (1<<bi);
+                idx_to_pos(i, &bp, &bi); pkt[bp] ^= (1 << bi);
+                idx_to_pos(j, &bp, &bi); pkt[bp] ^= (1 << bi);
                 return 2;
             }
         }
     }
-    for (int i = 0; i < num_bits; i++) {
+    for (int i = 0; i < NUM_TOTAL_BITS; i++) {
         uint64_t r1 = syndrome ^ syn[i];
-        for (int j = i+1; j < num_bits; j++) {
+        for (int j = i+1; j < NUM_TOTAL_BITS; j++) {
             uint64_t r2 = r1 ^ syn[j];
-            for (int k = j+1; k < num_bits; k++) {
+            for (int k = j+1; k < NUM_TOTAL_BITS; k++) {
                 if (syn[k] == r2) {
-                    idx_to_pos(i, &bp, &bi); pkt[bp] ^= (1<<bi);
-                    idx_to_pos(j, &bp, &bi); pkt[bp] ^= (1<<bi);
-                    idx_to_pos(k, &bp, &bi); pkt[bp] ^= (1<<bi);
+                    idx_to_pos(i, &bp, &bi); pkt[bp] ^= (1 << bi);
+                    idx_to_pos(j, &bp, &bi); pkt[bp] ^= (1 << bi);
+                    idx_to_pos(k, &bp, &bi); pkt[bp] ^= (1 << bi);
                     return 3;
                 }
             }
@@ -196,49 +168,26 @@ static int correct_packet(uint8_t *pkt, uint64_t syndrome,
 }
 
 /*
- * Validate STD packet. Returns 0=valid, 1/2/3=corrected, -1=reboot, -2=bad.
- */
-int d3g_validate_std(uint8_t *pkt)
-{
-    if (pkt[4] & 0x80) return -1;
-    uint64_t exp = std_expected(pkt);
-    uint64_t act = ((uint64_t)pkt[15]<<32)|((uint64_t)pkt[16]<<24)|
-                   ((uint64_t)pkt[17]<<16)|((uint64_t)pkt[18]<<8)|pkt[19];
-    uint64_t syn_val = exp ^ act;
-    if (syn_val == 0) return 0;
-    uint64_t syn[STD_NUM_BITS];
-    std_build_syndromes(syn);
-    return correct_packet(pkt, syn_val, syn, STD_NUM_BITS, idx_to_pos_std);
-}
-
-/*
- * Validate x40/Sonata packet. Returns 0=valid, 1/2/3=corrected, -1=reboot, -2=bad.
- */
-int d3g_validate_x40(uint8_t *pkt)
-{
-    if (pkt[4] & 0x80) return -1;
-    uint64_t exp = x40_expected(pkt);
-    uint64_t act = ((uint64_t)pkt[15]<<32)|((uint64_t)pkt[16]<<24)|
-                   ((uint64_t)pkt[17]<<16)|((uint64_t)pkt[18]<<8)|pkt[19];
-    uint64_t syn_val = exp ^ act;
-    if (syn_val == 0) return 0;
-    uint64_t syn[X40_NUM_BITS];
-    x40_build_syndromes(syn);
-    return correct_packet(pkt, syn_val, syn, X40_NUM_BITS, idx_to_pos_x40);
-}
-
-/*
- * Auto-detect group and validate.
+ * Validate any Dialog 3G packet. Returns 0=valid, 1/2/3=corrected, -1=reboot, -2=bad.
  */
 int d3g_validate(uint8_t *pkt)
 {
-    if (pkt[8] == 0x00 && pkt[9] == 0x00) return d3g_validate_std(pkt);
-    if (pkt[9] == 0x40)                    return d3g_validate_x40(pkt);
-    return -2;  /* unknown group */
+    if (pkt[4] & 0x80) return -1;
+
+    uint64_t exp = d3g_expected(pkt);
+    uint64_t act = ((uint64_t)pkt[15]<<32)|((uint64_t)pkt[16]<<24)|
+                   ((uint64_t)pkt[17]<<16)|((uint64_t)pkt[18]<<8)|pkt[19];
+    uint64_t syn_val = exp ^ act;
+
+    if (syn_val == 0) return 0;
+
+    uint64_t syn[NUM_TOTAL_BITS];
+    d3g_build_syndromes(syn);
+    return correct_packet(pkt, syn_val, syn);
 }
 
 /*
- * Derive the meter constant (strips consumption contribution).
+ * Derive the meter constant (strips consumption contribution only).
  */
 uint64_t d3g_derive_constant(const uint8_t *pkt)
 {
