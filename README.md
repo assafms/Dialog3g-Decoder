@@ -10,7 +10,7 @@ The Arad Dialog 3G is a water meter deployed in Israel and other countries opera
 - **ESPHome component** that receives and decodes meter packets
 - **Unified LFSR validation** for all meter groups — single model, no per-group configuration
 - **3-bit error correction** — recovers packets with up to 3 corrupted bits
-- **Two-packet confirmation** as fallback when error correction is insufficient
+- **ID recovery** — corrects corrupted meter IDs using per-meter constants from validated packets
 
 ## Meter Groups
 

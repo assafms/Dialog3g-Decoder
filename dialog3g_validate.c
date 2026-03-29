@@ -187,7 +187,7 @@ int d3g_validate(uint8_t *pkt)
 }
 
 /*
- * Derive the meter constant (strips consumption contribution only).
+ * Derive per-meter constant for ID recovery (strips consumption bytes 10-12).
  */
 uint64_t d3g_derive_constant(const uint8_t *pkt)
 {

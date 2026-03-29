@@ -196,16 +196,6 @@ valid = (expected == bytes[15:19])
 
 This detects RF bit errors in any of bytes 0–19. Works for **all meter groups** with a single universal offset. Error correction up to 3 bits is possible via syndrome matching (see reference implementation).
 
-### Two-Packet Method (No Prior Knowledge)
-
-1. Receive two packets from the same meter (match bytes 5–7).
-2. For each, derive the per-meter constant (strips consumption bytes 10–12):
-   ```
-   constant = scrambled ⊕ LFSR_contribution(bytes 10–12)
-   ```
-3. If both constants match → both packets are valid and the constant is confirmed.
-4. Store the constant for future single-packet validation of this meter.
-
 ### ID Recovery
 
 When a packet fails validation but consumption and scramble bytes are clean (only meter ID corrupted):
@@ -306,7 +296,7 @@ def expected(pkt):
 | ID basis (bit 2) | **High** | RANSAC 71/71 (100% for standard meters). No physical verification yet |
 | ID basis (bit 7) | **Zero** | Confirmed unused by protocol |
 | Full validation (unified, with 3-bit correction) | **80%** STD, **83%** 3D0C, **78%** x40 | Remaining ~20% are RF errors beyond 3-bit correction |
-| Two-packet method | **Proven** | Works on all meter types including 3D0C |
+| ID recovery | **Proven** | Derive constant by stripping consumption, look up known meter |
 
 ### Methodology
 
@@ -314,9 +304,7 @@ The scrambling algorithm was reverse-engineered through a strictly non-circular 
 
 1. **Consumption basis (bits 0–16)**: Derived from same-meter sequential packet pairs where only the consumption changed (transition analysis). This isolates each bit's contribution with zero dependency on the ID basis. Bits 0–14 from 370+ readings. Bit 15 from 4 standard meters + 3D0C confirmation. Bit 16 from 2 meters.
 
-2. **Per-meter constants (two-packet method)**: For meters with consumption < 2^17 (within proven CONS_BASIS range), two or more packets with different consumption values but the same derived constant confirm the constant independently of the ID basis.
-
-3. **ID basis (RANSAC)**: Solved over 71 standard two-packet-confirmed meters using RANSAC (50,000 iterations). Result: **71/71 (100%)** for standard meters. One non-standard meter (134C97, bytes 8-9 = `0x0A 0x0C`) was inadvertently included and was the sole failure — confirming non-standard meters use different ID matrices. Bits 0, 1, 4 additionally constrained by physically verified meter serial numbers. Bit 7 confirmed zero.
+2. **ID basis (RANSAC)**: Solved over 71 standard meters using RANSAC (50,000 iterations). Result: **71/71 (100%)**. One non-standard meter (134C97, bytes 8-9 = `0x0A 0x0C`) was inadvertently included and was the sole failure — confirming non-standard meters use different ID matrices. Bits 0, 1, 4 additionally constrained by physically verified meter serial numbers. Bit 7 confirmed zero.
 
 4. **Physical verification**: 3 standard meters physically read — 93D9E9 (bits 3,5,6), 082CD3 serial 13839368 (bit 6), 5E2EE8 serial 15216222 (bits 3,5,6). Proves ID bits 3, 5, 6. Bit 2 supported by RANSAC only (no standard meter with bit 2 has been physically verified). Additionally, 1 3D0C meter physically verified (6816F9).
 
@@ -331,7 +319,7 @@ The scrambling algorithm was reverse-engineered through a strictly non-circular 
 Earlier iterations of this research fell into circular reasoning: using the ID basis to validate meters, then using those validated meters to confirm the ID basis. The current solution avoids this by:
 
 - CONS_BASIS derived only from transition analysis (no ID dependency)
-- Per-meter constants derived only from two-packet method (no ID dependency)
+- Per-meter constants derived by stripping consumption from validated packets
 - ID_BASIS derived only from independently confirmed constants
 - CONS_BASIS bits 17+ removed until they can be derived without depending on the ID basis
 
