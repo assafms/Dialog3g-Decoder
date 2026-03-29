@@ -4,7 +4,7 @@ Custom ESPHome component for receiving and validating Arad Dialog 3G water meter
 
 ## Features
 
-- Single-packet GF(2) validation — every packet is independently verified
+- Unified LFSR validation with up to 3-bit error correction — all meter groups, single model
 - Configurable meter ID via YAML
 - Packet sniffer mode for discovering meters and debugging
 - Automatic low-nibble masking on byte 20 (unreliable due to Manchester timing drift)
@@ -58,13 +58,14 @@ Example: decimal `5136830` -> hex `0x4E61BE` -> reversed `0xBE614E` -> `meter_id
 
 ## How Validation Works
 
-Bytes 15-19 of each packet contain a 40-bit scrambled value that is a deterministic GF(2) linear function of the meter ID and consumption reading. The component computes the expected scramble from the packet data and compares it to the received value.
+Bytes 15-19 of each packet contain a 40-bit scrambled value computed via a unified LFSR-based GF(2) linear function of all data bytes 0-14. The component computes the expected scramble and compares it to the received value. If they don't match, it attempts to correct up to 3 bit errors using syndrome matching across 160 bit positions.
 
-- **Valid**: expected scramble matches received — reading is published to Home Assistant
-- **Invalid**: mismatch detected — packet is discarded (logged as warning)
+- **Valid**: expected scramble matches — reading is published to Home Assistant
+- **Corrected (1-3 bits)**: bit errors detected and fixed — corrected reading is published
+- **Invalid**: more than 3 bit errors — packet is discarded (logged as warning)
 - **ID mismatch**: packet is from a different meter — silently ignored
 
-Every packet is validated on its own. No learning phase, no warm-up, no dependency on previous packets.
+Works for all meter groups (STD, x40/Sonata, 3D0C) with a single universal offset. No per-group configuration needed.
 
 ## Packet Sniffer Mode
 

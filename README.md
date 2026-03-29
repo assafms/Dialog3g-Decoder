@@ -8,22 +8,23 @@ The Arad Dialog 3G is a water meter deployed in Israel and other countries opera
 
 - **Custom PCB** connecting an XL4432 module to an ESP via SPI
 - **ESPHome component** that receives and decodes meter packets
-- **Single-packet GF(2) validation** for standard meters — detects RF bit errors without CRC
-- **Two-packet validation** for non-standard meters (3D0C, x40) — no ID matrix needed
+- **Unified LFSR validation** for all meter groups — single model, no per-group configuration
+- **3-bit error correction** — recovers packets with up to 3 corrupted bits
+- **Two-packet confirmation** as fallback when error correction is insufficient
 
 ## Meter Groups
 
-| Group | Bytes 8-9 | Validation | Notes |
-|-------|-----------|------------|-------|
-| Standard | `0x00 0x00` | Full GF(2) (single packet) | Residential meters, fully proven |
-| x40 | `0x00 0x40` | Two-packet method | Likely commercial/street meters |
-| 3D0C | `0x3D 0x0C` | Two-packet method | Older model |
+| Group | Bytes 8-9 | Cons Divisor | Notes |
+|-------|-----------|-------------|-------|
+| Standard | `0x00 0x00` | ÷10 (0.1 m³) | Residential meters |
+| Sonata/x40 | `0x00 0x40` | ÷1000 (1 liter) | Commercial/street meters |
+| 3D0C | `0x3D 0x0C` | ÷10 (0.1 m³) | Older model |
 
-All groups share the same consumption basis vectors. Standard meters have a fully proven ID basis matrix. Non-standard meters use different (unsolved) ID matrices, so they fall back to the two-packet method: if two packets from the same meter yield the same derived constant, both readings are confirmed valid.
+All groups use the same unified LFSR model with a single universal offset (`0x6FF11521E8`). No per-group detection or configuration needed — bytes 8-9 are just more data bits in the LFSR.
 
 ## How It Works
 
-The meter transmits a 21-byte FSK/Manchester-encoded packet every ~30 seconds containing the meter ID and consumption reading. For standard meters, the ESPHome component validates every received packet independently using a GF(2) linear function. For non-standard meters, it stores the derived constant from the first packet and validates subsequent packets by comparing constants. Only validated readings are published to Home Assistant.
+The meter transmits a 21-byte FSK/Manchester-encoded packet every ~30 seconds containing the meter ID and consumption reading. The ESPHome component validates every packet using a unified LFSR-based GF(2) model that works for all meter groups. It also applies up to 3-bit error correction to recover packets with minor RF corruption. Only validated readings are published to Home Assistant.
 
 ## Hardware
 
@@ -113,67 +114,22 @@ Enable phone hotspot, configure ESPHome WiFi with the hotspot credentials, and t
 
 ## GF(2) Scrambling Algorithm
 
-Bytes 15-19 of each packet contain a 40-bit value that is a **linear function over GF(2)** of the meter ID and consumption reading:
+Bytes 15-19 of each packet contain a 40-bit value that is a **linear function over GF(2)** of all data bytes 0-14, computed via a single 40-bit LFSR:
 
 ```
-scrambled = OFFSET ^ M_id(meter_id) ^ M_cons(consumption)
+scrambled = OFFSET ^ ⨁(LFSR_vec[pos] for each set bit in bytes 0-14)
 ```
 
 Where:
-- **OFFSET** depends on meter group: STD=`0xDF750DC2C0`, x40=`0xAAF90B5990`, 3D0C=`0x6D2A310958`
-- **M_id** is a 40x24 binary matrix applied to the 24-bit meter ID (shared across all groups)
-- **M_cons** is a 40x24 binary matrix applied to the 24-bit consumption value (shared across all groups)
+- **OFFSET** = `0x6FF11521E8` — universal, same for all meter groups
+- All 120 basis vectors are consecutive states of a 40-bit LFSR (seed `0x51AAF3D980`, 3 feedback taps)
+- Forward chain: bytes 12→11→10→9→8→7→6→5→4→3→2→1→0 (104 states)
+- Backward chain: bytes 13→14 (16 states, stored as lookup)
 - **^** is bitwise XOR
-
-### Consumption Basis Vectors (bits 0-23, all groups)
-
-| Bit | Vector | Bit | Vector |
-|-----|--------|-----|--------|
-| 0 | `0x61B89FB6A0` | 12 | `0x841AB44F10` |
-| 1 | `0xE360308318` | 13 | `0x0835A7BB10` |
-| 2 | `0xC6C12115C8` | 14 | `0x106AC040E8` |
-| 3 | `0xAD9382E0F8` | 15 | `0x20D40FB718` |
-| 4 | `0x7B374A3C50` | 16 | `0x51AAF3D980` |
-| 5 | `0xF66E9478A0` | 17 | `0x2826118BE0` |
-| 6 | `0xECDDE7D470` | 18 | `0xADEBE64938` |
-| 7 | `0xF9AB805540` | 19 | `0x2D02BFE790` |
-| 8 | `0xA045A72F80` | 20 | `0x5A04F0F9E8` |
-| 9 | `0x408B817A30` | 21 | `0xB4086EC518` |
-| 10 | `0xA1060D1A38` | 22 | `0xC0E088FEF8` |
-| 11 | `0x420D5A2788` | 23 | `0xD022B40558` |
-
-### Meter ID Basis Vectors (bits 0-23, all groups)
-
-| Bit | Vector | Bit | Vector |
-|-----|--------|-----|--------|
-| 0 | `0x456FF2CC60` | 12 | `0x3D5518F660` |
-| 1 | `0x8ADE6AAE08` | 13 | `0x7AAA31ECC0` |
-| 2 | `0x0149F2DC28` | 14 | `0xD544E30110` |
-| 3 | `0x7FAE4CBD30` | 15 | `0xAA89092710` |
-| 4 | `0x9694D8DA08` | 16 | `0x7503D28548` |
-| 5 | `0x39DD1902E0` | 17 | `0xEA062A3C58` |
-| 6 | `0x2E9694EEF8` | 18 | `0xD40D146B48` |
-| 7 | `0x0000000000` | 19 | `0xA81B68C568` |
-| 8 | `0x49D8C178F8` | 20 | `0x5037919928` |
-| 9 | `0xB3A08D1FA8` | 21 | `0xA06EAC0498` |
-| 10 | `0x475155C2F0` | 22 | `0x40DD972C00` |
-| 11 | `0x8EA2AB85E0` | 23 | `0xA1AA21B658` |
-
-All 24 vectors shared across all meter groups. Bit 7 confirmed zero. Bits 0,1,4 proven by physical serial numbers. Bits 3,5,6 proven by physical meter readings. Bit 2 supported by RANSAC 71/71.
 
 ### Validation
 
-All groups use single-packet validation: compute expected scramble from OFFSET + meter ID + consumption, compare to received bytes 15-19. Any mismatch = RF bit error. Select OFFSET based on bytes 8-9.
-
-### Methodology
-
-1. Consumption basis vectors from same-meter transition analysis (ID-independent)
-2. Per-meter constants via two-packet method (ID-independent)
-3. ID basis matrix via RANSAC over 71 two-packet-confirmed meters (71/71, 100%)
-4. Physical verification against 3 standard meters + 1 Sonata meter
-5. Group offsets discovered by testing if non-standard meters share the ID_BASIS (they do)
-6. CONS_BASIS bits 17-23 derived from x40 high-consumption data using proven x40 OFFSET
-7. Field validation: 334 meters pass across all groups
+Single model for all groups: compute expected scramble via LFSR from bytes 0-14, compare to received bytes 15-19. Up to 3 corrupted bits can be automatically corrected using 160 syndrome bits (120 data + 40 scramble). Achieves 80% STD, 78% x40, 83% 3D0C validation rate. See `PROTOCOL.md` for full details and basis vector tables.
 
 ## Links
 
